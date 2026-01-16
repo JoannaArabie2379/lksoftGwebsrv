@@ -1,0 +1,732 @@
+{% extends "base.html" %}
+
+{% block title %}Карта - ИГС Портал{% endblock %}
+
+{% block extra_css %}
+<style>
+.map-container {
+    display: flex;
+    height: calc(100vh - 60px);
+}
+
+#map {
+    flex: 1;
+    height: 100%;
+}
+
+.map-sidebar {
+    width: 320px;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-header h3 {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.crs-selector {
+    display: flex;
+    gap: 8px;
+}
+
+.crs-btn {
+    flex: 1;
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.crs-btn.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.layers-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.layer-group {
+    margin-bottom: 16px;
+}
+
+.layer-group-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.layer-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.layer-item:hover {
+    background: var(--bg-hover);
+}
+
+.layer-checkbox {
+    margin-right: 10px;
+}
+
+.layer-icon {
+    width: 24px;
+    height: 24px;
+    margin-right: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.layer-icon.point {
+    background: var(--layer-color, #3498db);
+    border-radius: 50%;
+    width: 12px;
+    height: 12px;
+}
+
+.layer-icon.line {
+    height: 3px;
+    background: var(--layer-color, #3498db);
+    border-radius: 2px;
+}
+
+.layer-name {
+    flex: 1;
+    font-size: 14px;
+}
+
+.layer-count {
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+.object-panel {
+    border-top: 1px solid var(--border-color);
+    padding: 16px;
+    max-height: 40%;
+    overflow-y: auto;
+    display: none;
+}
+
+.object-panel.show {
+    display: block;
+}
+
+.object-panel h4 {
+    margin: 0 0 12px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.object-details {
+    font-size: 14px;
+}
+
+.object-details dt {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.object-details dd {
+    margin: 4px 0 0 0;
+}
+
+.object-photos {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.object-photo {
+    width: 60px;
+    height: 60px;
+    border-radius: 6px;
+    object-fit: cover;
+    cursor: pointer;
+}
+
+/* Map controls */
+.map-controls {
+    position: absolute;
+    top: 80px;
+    right: 340px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.map-control-btn {
+    width: 40px;
+    height: 40px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 18px;
+    transition: background 0.2s;
+}
+
+.map-control-btn:hover {
+    background: var(--bg-hover);
+}
+
+/* Leaflet popup customization */
+.leaflet-popup-content-wrapper {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-radius: 8px;
+}
+
+.leaflet-popup-tip {
+    background: var(--bg-secondary);
+}
+
+.popup-content h4 {
+    margin: 0 0 8px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.popup-content p {
+    margin: 4px 0;
+    font-size: 13px;
+}
+
+.popup-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="map-container">
+    <div id="map"></div>
+    
+    <div class="map-sidebar">
+        <div class="sidebar-header">
+            <h3>Система координат</h3>
+            <div class="crs-selector">
+                <button class="crs-btn active" onclick="setCRS('wgs84')" id="btn-wgs84">WGS84</button>
+                <button class="crs-btn" onclick="setCRS('msk86')" id="btn-msk86">МСК-86 Зона 4</button>
+            </div>
+            
+            <div class="form-group" style="margin-top: 12px;">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="osm-toggle" checked onchange="toggleOSM()">
+                    OpenStreetMap подложка
+                </label>
+            </div>
+        </div>
+        
+        <div class="layers-panel">
+            <div class="layer-group">
+                <div class="layer-group-title">Точечные объекты</div>
+                
+                <label class="layer-item" style="--layer-color: #27ae60;">
+                    <input type="checkbox" class="layer-checkbox" checked 
+                           data-layer="wells" onchange="toggleLayer('wells')">
+                    <span class="layer-icon point"></span>
+                    <span class="layer-name">Колодцы</span>
+                    <span class="layer-count" id="count-wells">0</span>
+                </label>
+                
+                <label class="layer-item" style="--layer-color: #f39c12;">
+                    <input type="checkbox" class="layer-checkbox" checked 
+                           data-layer="marker_posts" onchange="toggleLayer('marker_posts')">
+                    <span class="layer-icon point"></span>
+                    <span class="layer-name">Указ. столбики</span>
+                    <span class="layer-count" id="count-marker_posts">0</span>
+                </label>
+            </div>
+            
+            <div class="layer-group">
+                <div class="layer-group-title">Линейные объекты</div>
+                
+                <label class="layer-item" style="--layer-color: #3498db;">
+                    <input type="checkbox" class="layer-checkbox" checked 
+                           data-layer="channel_directions" onchange="toggleLayer('channel_directions')">
+                    <span class="layer-icon line"></span>
+                    <span class="layer-name">Направления каналов</span>
+                    <span class="layer-count" id="count-channel_directions">0</span>
+                </label>
+                
+                <label class="layer-item" style="--layer-color: #e74c3c;">
+                    <input type="checkbox" class="layer-checkbox" checked 
+                           data-layer="ground_cables" onchange="toggleLayer('ground_cables')">
+                    <span class="layer-icon line"></span>
+                    <span class="layer-name">Кабель в грунте</span>
+                    <span class="layer-count" id="count-ground_cables">0</span>
+                </label>
+                
+                <label class="layer-item" style="--layer-color: #9b59b6;">
+                    <input type="checkbox" class="layer-checkbox" checked 
+                           data-layer="aerial_cables" onchange="toggleLayer('aerial_cables')">
+                    <span class="layer-icon line"></span>
+                    <span class="layer-name">Воздушные кабели</span>
+                    <span class="layer-count" id="count-aerial_cables">0</span>
+                </label>
+                
+                <label class="layer-item" style="--layer-color: #1abc9c;">
+                    <input type="checkbox" class="layer-checkbox" checked 
+                           data-layer="duct_cables" onchange="toggleLayer('duct_cables')">
+                    <span class="layer-icon line"></span>
+                    <span class="layer-name">Кабель в канализации</span>
+                    <span class="layer-count" id="count-duct_cables">0</span>
+                </label>
+            </div>
+        </div>
+        
+        <div class="object-panel" id="object-panel">
+            <h4>
+                <span id="object-title">Объект</span>
+                <button class="btn btn-sm btn-secondary" onclick="closeObjectPanel()">×</button>
+            </h4>
+            <dl class="object-details" id="object-details"></dl>
+            <div class="object-photos" id="object-photos"></div>
+            {% if not current_user.is_viewer() %}
+            <div class="popup-actions" style="margin-top: 16px;">
+                <button class="btn btn-sm btn-primary" id="btn-edit-object">Редактировать</button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="map-controls">
+        <button class="map-control-btn" onclick="map.setZoom(map.getZoom() + 1)" title="Приблизить">+</button>
+        <button class="map-control-btn" onclick="map.setZoom(map.getZoom() - 1)" title="Отдалить">−</button>
+        <button class="map-control-btn" onclick="fitAllLayers()" title="Показать все">🎯</button>
+        {% if not current_user.is_viewer() %}
+        <button class="map-control-btn" onclick="startDrawing('point')" title="Добавить точку">📍</button>
+        <button class="map-control-btn" onclick="startDrawing('line')" title="Добавить линию">✏️</button>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Map instance
+let map;
+let osmLayer;
+let currentCRS = 'wgs84';
+let layers = {};
+let layerData = {};
+
+// Layer colors
+const layerColors = {
+    wells: '#27ae60',
+    marker_posts: '#f39c12',
+    channel_directions: '#3498db',
+    ground_cables: '#e74c3c',
+    aerial_cables: '#9b59b6',
+    duct_cables: '#1abc9c'
+};
+
+// Initialize map
+document.addEventListener('DOMContentLoaded', function() {
+    initMap();
+    loadAllLayers();
+    
+    // Check URL params for focused object
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('layer') && params.get('id')) {
+        setTimeout(() => {
+            focusObject(params.get('layer'), parseInt(params.get('id')));
+        }, 1000);
+    }
+});
+
+function initMap() {
+    // Initialize map centered on approximate location (Surgut area)
+    map = L.map('map', {
+        center: [61.25, 73.42],
+        zoom: 12,
+        zoomControl: false
+    });
+    
+    // OSM layer
+    osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+    
+    // Initialize layer groups
+    const layerNames = ['wells', 'marker_posts', 'channel_directions', 'ground_cables', 'aerial_cables', 'duct_cables'];
+    layerNames.forEach(name => {
+        layers[name] = L.layerGroup().addTo(map);
+    });
+}
+
+async function loadAllLayers() {
+    const layerNames = ['wells', 'marker_posts', 'channel_directions', 'ground_cables', 'aerial_cables', 'duct_cables'];
+    
+    for (const layerName of layerNames) {
+        await loadLayer(layerName);
+    }
+}
+
+async function loadLayer(layerName) {
+    try {
+        const response = await fetch(`/api/map/geojson/${layerName}?crs=${currentCRS}`);
+        const geojson = await response.json();
+        
+        layerData[layerName] = geojson;
+        
+        // Clear existing layer
+        layers[layerName].clearLayers();
+        
+        // Add features
+        if (geojson.features && geojson.features.length > 0) {
+            const geoJsonLayer = L.geoJSON(geojson, {
+                pointToLayer: function(feature, latlng) {
+                    return L.circleMarker(latlng, {
+                        radius: 8,
+                        fillColor: feature.properties.state_color || layerColors[layerName],
+                        color: '#fff',
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    });
+                },
+                style: function(feature) {
+                    return {
+                        color: feature.properties.state_color || layerColors[layerName],
+                        weight: 3,
+                        opacity: 0.8
+                    };
+                },
+                onEachFeature: function(feature, layer) {
+                    layer.on('click', function() {
+                        showObjectInfo(layerName, feature.properties.id);
+                    });
+                    
+                    // Popup
+                    const props = feature.properties;
+                    layer.bindPopup(`
+                        <div class="popup-content">
+                            <h4>${props.number || 'Без номера'}</h4>
+                            <p><strong>Тип:</strong> ${props.type_name || '-'}</p>
+                            <p><strong>Состояние:</strong> ${props.state_name || '-'}</p>
+                            <p><strong>Собственник:</strong> ${props.owner_name || '-'}</p>
+                        </div>
+                    `);
+                }
+            });
+            
+            layers[layerName].addLayer(geoJsonLayer);
+        }
+        
+        // Update count
+        document.getElementById(`count-${layerName}`).textContent = geojson.features ? geojson.features.length : 0;
+        
+    } catch (e) {
+        console.error(`Error loading layer ${layerName}:`, e);
+    }
+}
+
+function toggleLayer(layerName) {
+    const checkbox = document.querySelector(`[data-layer="${layerName}"]`);
+    if (checkbox.checked) {
+        map.addLayer(layers[layerName]);
+    } else {
+        map.removeLayer(layers[layerName]);
+    }
+}
+
+function setCRS(crs) {
+    currentCRS = crs;
+    
+    // Update buttons
+    document.getElementById('btn-wgs84').classList.toggle('active', crs === 'wgs84');
+    document.getElementById('btn-msk86').classList.toggle('active', crs === 'msk86');
+    
+    // Toggle OSM (only available for WGS84)
+    const osmToggle = document.getElementById('osm-toggle');
+    if (crs === 'msk86') {
+        osmToggle.checked = false;
+        osmToggle.disabled = true;
+        map.removeLayer(osmLayer);
+    } else {
+        osmToggle.disabled = false;
+        if (osmToggle.checked) {
+            map.addLayer(osmLayer);
+        }
+    }
+    
+    // Reload all layers with new CRS
+    loadAllLayers();
+}
+
+function toggleOSM() {
+    const checked = document.getElementById('osm-toggle').checked;
+    if (checked && currentCRS === 'wgs84') {
+        map.addLayer(osmLayer);
+    } else {
+        map.removeLayer(osmLayer);
+    }
+}
+
+function fitAllLayers() {
+    let bounds = L.latLngBounds();
+    let hasData = false;
+    
+    Object.values(layers).forEach(layerGroup => {
+        layerGroup.eachLayer(layer => {
+            if (layer.getBounds) {
+                bounds.extend(layer.getBounds());
+                hasData = true;
+            } else if (layer.getLatLng) {
+                bounds.extend(layer.getLatLng());
+                hasData = true;
+            }
+        });
+    });
+    
+    if (hasData) {
+        map.fitBounds(bounds, { padding: [50, 50] });
+    }
+}
+
+async function showObjectInfo(layerName, objectId) {
+    try {
+        const response = await fetch(`/api/objects/${layerName}/${objectId}`);
+        const obj = await response.json();
+        
+        const panel = document.getElementById('object-panel');
+        const title = document.getElementById('object-title');
+        const details = document.getElementById('object-details');
+        const photos = document.getElementById('object-photos');
+        
+        // Set title
+        const titles = {
+            wells: 'Колодец',
+            marker_posts: 'Указательный столбик',
+            channel_directions: 'Направление канала',
+            ground_cables: 'Кабель в грунте',
+            aerial_cables: 'Воздушный кабель',
+            duct_cables: 'Кабель в канализации'
+        };
+        title.textContent = `${titles[layerName]} #${obj.number || obj.id}`;
+        
+        // Build details
+        let html = `
+            <dt>ID</dt><dd>${obj.id}</dd>
+            <dt>Номер</dt><dd>${obj.number || '-'}</dd>
+        `;
+        
+        if (obj.lat_wgs84 && obj.lon_wgs84) {
+            html += `
+                <dt>Координаты (WGS84)</dt>
+                <dd>${obj.lat_wgs84.toFixed(6)}, ${obj.lon_wgs84.toFixed(6)}</dd>
+            `;
+        }
+        
+        if (obj.description) {
+            html += `<dt>Описание</dt><dd>${obj.description}</dd>`;
+        }
+        
+        html += `
+            <dt>Создан</dt><dd>${new Date(obj.created_at).toLocaleString('ru-RU')}</dd>
+        `;
+        
+        details.innerHTML = html;
+        
+        // Photos
+        if (obj.photos && obj.photos.length > 0) {
+            photos.innerHTML = obj.photos.map(p => 
+                `<img src="/uploads/${p.file_path}" class="object-photo" 
+                      onclick="openPhotoViewer('${p.file_path}')" 
+                      alt="${p.original_filename}">`
+            ).join('');
+        } else {
+            photos.innerHTML = '<p style="color: var(--text-muted); font-size: 12px;">Нет фотографий</p>';
+        }
+        
+        // Edit button
+        document.getElementById('btn-edit-object').onclick = () => editObject(layerName, objectId);
+        
+        panel.classList.add('show');
+        
+    } catch (e) {
+        console.error('Error loading object:', e);
+    }
+}
+
+function closeObjectPanel() {
+    document.getElementById('object-panel').classList.remove('show');
+}
+
+function focusObject(layerName, objectId) {
+    // Find and focus the object on the map
+    const geojson = layerData[layerName];
+    if (!geojson || !geojson.features) return;
+    
+    const feature = geojson.features.find(f => f.properties.id === objectId);
+    if (!feature) return;
+    
+    if (feature.geometry.type === 'Point') {
+        const coords = feature.geometry.coordinates;
+        map.setView([coords[1], coords[0]], 16);
+    } else {
+        // For lines, fit bounds
+        const layer = L.geoJSON(feature);
+        map.fitBounds(layer.getBounds(), { padding: [50, 50] });
+    }
+    
+    showObjectInfo(layerName, objectId);
+}
+
+// Drawing mode
+let drawingMode = null;
+let drawingPoints = [];
+let tempMarkers = [];
+let tempLine = null;
+
+function startDrawing(mode) {
+    drawingMode = mode;
+    drawingPoints = [];
+    
+    // Clear any existing temp markers
+    tempMarkers.forEach(m => map.removeLayer(m));
+    tempMarkers = [];
+    if (tempLine) map.removeLayer(tempLine);
+    
+    // Change cursor
+    document.getElementById('map').style.cursor = 'crosshair';
+    
+    // Show instructions
+    showNotification(
+        mode === 'point' 
+            ? 'Кликните на карте для размещения точки' 
+            : 'Кликайте для добавления точек линии. Двойной клик для завершения.',
+        'info'
+    );
+    
+    // Add click handler
+    map.on('click', onMapClick);
+    map.on('dblclick', onMapDblClick);
+}
+
+function onMapClick(e) {
+    if (!drawingMode) return;
+    
+    const latlng = e.latlng;
+    drawingPoints.push([latlng.lng, latlng.lat]);
+    
+    if (drawingMode === 'point') {
+        // Single point - show modal
+        finishDrawing();
+    } else {
+        // Add temp marker
+        const marker = L.circleMarker(latlng, {
+            radius: 5,
+            fillColor: '#3498db',
+            color: '#fff',
+            weight: 2,
+            fillOpacity: 1
+        }).addTo(map);
+        tempMarkers.push(marker);
+        
+        // Update temp line
+        if (tempLine) map.removeLayer(tempLine);
+        if (drawingPoints.length >= 2) {
+            const lineCoords = drawingPoints.map(p => [p[1], p[0]]);
+            tempLine = L.polyline(lineCoords, {
+                color: '#3498db',
+                weight: 3,
+                dashArray: '10, 5'
+            }).addTo(map);
+        }
+    }
+}
+
+function onMapDblClick(e) {
+    if (drawingMode === 'line' && drawingPoints.length >= 2) {
+        finishDrawing();
+    }
+}
+
+function finishDrawing() {
+    map.off('click', onMapClick);
+    map.off('dblclick', onMapDblClick);
+    document.getElementById('map').style.cursor = '';
+    
+    // Clear temp markers
+    tempMarkers.forEach(m => map.removeLayer(m));
+    tempMarkers = [];
+    if (tempLine) map.removeLayer(tempLine);
+    
+    // Show create modal with coordinates
+    if (drawingMode === 'point') {
+        showCreatePointModal(drawingPoints[0]);
+    } else {
+        showCreateLineModal(drawingPoints);
+    }
+    
+    drawingMode = null;
+    drawingPoints = [];
+}
+
+function showCreatePointModal(coords) {
+    // Use existing add modal
+    document.getElementById('add-object-modal').classList.add('show');
+    document.getElementById('new-object-type').value = 'wells';
+    updateObjectForm();
+    
+    // Fill coordinates
+    document.querySelector('[name="lon"]').value = coords[0].toFixed(6);
+    document.querySelector('[name="lat"]').value = coords[1].toFixed(6);
+}
+
+function showCreateLineModal(coords) {
+    // For now, just log
+    console.log('Create line with coords:', coords);
+    showNotification('Создание линейных объектов через карту будет доступно в следующей версии', 'info');
+}
+
+function editObject(layerName, objectId) {
+    showNotification('Редактирование будет открыто', 'info');
+    // TODO: Implement edit modal
+}
+
+function openPhotoViewer(path) {
+    window.open('/uploads/' + path, '_blank');
+}
+</script>
+{% endblock %}

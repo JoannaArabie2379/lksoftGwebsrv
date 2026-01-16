@@ -1,0 +1,22 @@
+# Flask and extensions
+Flask==3.0.0
+Flask-Login==0.6.3
+Flask-WTF==1.2.1
+Werkzeug==3.0.1
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.23
+GeoAlchemy2==0.14.2
+
+# Utilities
+python-dotenv==1.0.0
+bcrypt==4.1.2
+Pillow==10.1.0
+
+# GIS/Geo processing
+pyproj==3.6.1
+shapely==2.0.2
+
+# File parsing
+pandas==2.1.4

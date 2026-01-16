@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ИГС Портал{% endblock %}</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    {% if current_user.is_authenticated %}
+    <nav class="navbar">
+        <div class="navbar-brand">
+            <a href="{{ url_for('index') }}">
+                <span class="logo-icon">🗺️</span>
+                <span class="logo-text">ИГС Портал</span>
+            </a>
+        </div>
+        
+        <div class="navbar-menu">
+            <a href="{{ url_for('index') }}" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
+                Главная
+            </a>
+            <a href="{{ url_for('map_view') }}" class="nav-item {% if request.endpoint == 'map_view' %}active{% endif %}">
+                Карта
+            </a>
+            {% if current_user.is_admin() %}
+            <a href="#" class="nav-item" onclick="openAdminPanel()">
+                Администрирование
+            </a>
+            {% endif %}
+        </div>
+        
+        <div class="navbar-end">
+            <div class="theme-switcher">
+                <button class="btn-icon" onclick="toggleTheme()" title="Сменить тему">
+                    <span id="theme-icon">🌙</span>
+                </button>
+            </div>
+            <div class="user-info">
+                <span class="user-name">{{ current_user.username }}</span>
+                <span class="user-role">({{ current_user.role }})</span>
+            </div>
+            <a href="{{ url_for('logout') }}" class="btn btn-outline">Выход</a>
+        </div>
+    </nav>
+    {% endif %}
+    
+    <main class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">
+                            {{ message }}
+                            <button class="alert-close" onclick="this.parentElement.remove()">×</button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        {% block content %}{% endblock %}
+    </main>
+    
+    <!-- Modal container -->
+    <div id="modal-container"></div>
+    
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

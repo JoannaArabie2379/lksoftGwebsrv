@@ -1,0 +1,544 @@
+{% extends "base.html" %}
+
+{% block title %}Главная - ИГС Портал{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="dashboard-header">
+        <h1>Панель управления</h1>
+        <p>Информационная Географическая Система</p>
+    </div>
+    
+    <!-- Statistics Cards -->
+    <div class="stats-grid" id="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon">🔵</div>
+            <div class="stat-info">
+                <span class="stat-value" id="stat-wells">-</span>
+                <span class="stat-label">Колодцы</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">📍</div>
+            <div class="stat-info">
+                <span class="stat-value" id="stat-markers">-</span>
+                <span class="stat-label">Указ. столбики</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">➡️</div>
+            <div class="stat-info">
+                <span class="stat-value" id="stat-directions">-</span>
+                <span class="stat-label">Направления</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">🔌</div>
+            <div class="stat-info">
+                <span class="stat-value" id="stat-cables">-</span>
+                <span class="stat-label">Кабели</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Quick Actions -->
+    <div class="section">
+        <h2>Быстрые действия</h2>
+        <div class="action-grid">
+            <a href="{{ url_for('map_view') }}" class="action-card">
+                <span class="action-icon">🗺️</span>
+                <span class="action-title">Открыть карту</span>
+                <span class="action-desc">Просмотр всех объектов на карте</span>
+            </a>
+            
+            {% if not current_user.is_viewer() %}
+            <button class="action-card" onclick="showAddObjectModal()">
+                <span class="action-icon">➕</span>
+                <span class="action-title">Добавить объект</span>
+                <span class="action-desc">Создание нового объекта</span>
+            </button>
+            
+            <button class="action-card" onclick="showImportModal()">
+                <span class="action-icon">📥</span>
+                <span class="action-title">Импорт данных</span>
+                <span class="action-desc">Импорт из CSV/TAB</span>
+            </button>
+            {% endif %}
+            
+            {% if current_user.is_admin() %}
+            <button class="action-card" onclick="openAdminPanel()">
+                <span class="action-icon">⚙️</span>
+                <span class="action-title">Администрирование</span>
+                <span class="action-desc">Управление пользователями</span>
+            </button>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Objects List Section -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Объекты системы</h2>
+            <div class="section-actions">
+                <select id="object-type-select" onchange="loadObjects()">
+                    <option value="wells">Колодцы</option>
+                    <option value="marker_posts">Указательные столбики</option>
+                    <option value="channel_directions">Направления каналов</option>
+                    <option value="ground_cables">Кабель в грунте</option>
+                    <option value="aerial_cables">Воздушные кабели</option>
+                    <option value="duct_cables">Кабель в канализации</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table class="data-table" id="objects-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Номер</th>
+                        <th>Состояние</th>
+                        <th>Создан</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="objects-tbody">
+                    <tr>
+                        <td colspan="5" class="text-center">Загрузка...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Add Object Modal -->
+<div class="modal" id="add-object-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Добавить объект</h3>
+            <button class="modal-close" onclick="closeModal('add-object-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="add-object-form" onsubmit="submitNewObject(event)">
+                <div class="form-group">
+                    <label>Тип объекта</label>
+                    <select name="object_type" id="new-object-type" onchange="updateObjectForm()">
+                        <option value="wells">Колодец</option>
+                        <option value="marker_posts">Указательный столбик</option>
+                        <option value="channel_directions">Направление канала</option>
+                        <option value="ground_cables">Кабель в грунте</option>
+                        <option value="aerial_cables">Воздушный кабель</option>
+                        <option value="duct_cables">Кабель в канализации</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Номер *</label>
+                    <input type="text" name="number" required>
+                </div>
+                
+                <div class="form-row" id="point-coords">
+                    <div class="form-group">
+                        <label>Широта (WGS84)</label>
+                        <input type="number" name="lat" step="any" placeholder="61.0000">
+                    </div>
+                    <div class="form-group">
+                        <label>Долгота (WGS84)</label>
+                        <input type="number" name="lon" step="any" placeholder="73.0000">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Собственник</label>
+                    <select name="owner_id" id="owner-select">
+                        <option value="">-- Не выбран --</option>
+                    </select>
+                </div>
+                
+                <div class="form-group" id="well-type-group">
+                    <label>Тип колодца</label>
+                    <select name="well_type_id" id="well-type-select">
+                        <option value="">-- Не выбран --</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Состояние</label>
+                    <select name="state_id" id="state-select">
+                        <option value="">-- Не выбрано --</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Описание</label>
+                    <textarea name="description" rows="3"></textarea>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('add-object-modal')">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Создать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Import Modal -->
+<div class="modal" id="import-modal">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h3>Импорт данных</h3>
+            <button class="modal-close" onclick="closeModal('import-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="import-tabs">
+                <button class="tab-btn active" onclick="switchImportTab('csv')">CSV</button>
+                <button class="tab-btn" onclick="switchImportTab('tab')">TAB/MAP/DAT</button>
+            </div>
+            
+            <div id="csv-import" class="import-content active">
+                <form id="csv-import-form" onsubmit="submitCSVImport(event)">
+                    <div class="form-group">
+                        <label>Тип объекта</label>
+                        <select name="object_type" required>
+                            <option value="wells">Колодцы</option>
+                            <option value="marker_posts">Указательные столбики</option>
+                            <option value="ground_cables">Кабели в грунте</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>CSV файл</label>
+                        <input type="file" name="file" accept=".csv" required onchange="previewCSV(this)">
+                    </div>
+                    
+                    <div id="csv-preview" class="csv-preview hidden">
+                        <h4>Предпросмотр и сопоставление колонок</h4>
+                        <div id="csv-mapping"></div>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('import-modal')">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Импортировать</button>
+                    </div>
+                </form>
+            </div>
+            
+            <div id="tab-import" class="import-content">
+                <form id="tab-import-form" onsubmit="submitTABImport(event)">
+                    <div class="form-group">
+                        <label>Выберите комплект файлов (TAB, DAT, MAP, ID)</label>
+                        <input type="file" name="files" multiple accept=".tab,.dat,.map,.id" required>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('import-modal')">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Импортировать</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Admin Panel Modal -->
+<div class="modal" id="admin-modal">
+    <div class="modal-content modal-xl">
+        <div class="modal-header">
+            <h3>Администрирование</h3>
+            <button class="modal-close" onclick="closeModal('admin-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="admin-tabs">
+                <button class="tab-btn active" onclick="switchAdminTab('users')">Пользователи</button>
+                <button class="tab-btn" onclick="switchAdminTab('owners')">Собственники</button>
+                <button class="tab-btn" onclick="switchAdminTab('contracts')">Контракты</button>
+                <button class="tab-btn" onclick="switchAdminTab('references')">Справочники</button>
+            </div>
+            
+            <div id="admin-users" class="admin-content active">
+                <div class="admin-toolbar">
+                    <button class="btn btn-primary" onclick="showAddUserModal()">+ Добавить пользователя</button>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Логин</th>
+                            <th>ФИО</th>
+                            <th>Роль</th>
+                            <th>Активен</th>
+                            <th>Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-tbody"></tbody>
+                </table>
+            </div>
+            
+            <div id="admin-owners" class="admin-content">
+                <div class="admin-toolbar">
+                    <button class="btn btn-primary" onclick="showAddOwnerModal()">+ Добавить собственника</button>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Организация</th>
+                            <th>Контактное лицо</th>
+                            <th>Телефон</th>
+                            <th>Email</th>
+                        </tr>
+                    </thead>
+                    <tbody id="owners-tbody"></tbody>
+                </table>
+            </div>
+            
+            <div id="admin-contracts" class="admin-content">
+                <div class="admin-toolbar">
+                    <button class="btn btn-primary" onclick="showAddContractModal()">+ Добавить контракт</button>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Номер</th>
+                            <th>Дата</th>
+                            <th>Собственник</th>
+                        </tr>
+                    </thead>
+                    <tbody id="contracts-tbody"></tbody>
+                </table>
+            </div>
+            
+            <div id="admin-references" class="admin-content">
+                <p>Управление справочниками типов объектов</p>
+                <!-- Reference tables management -->
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Load statistics on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadStats();
+    loadObjects();
+    loadReferences();
+});
+
+async function loadStats() {
+    try {
+        const response = await fetch('/api/stats');
+        const stats = await response.json();
+        
+        document.getElementById('stat-wells').textContent = stats.wells || 0;
+        document.getElementById('stat-markers').textContent = stats.marker_posts || 0;
+        document.getElementById('stat-directions').textContent = stats.channel_directions || 0;
+        document.getElementById('stat-cables').textContent = 
+            (stats.ground_cables || 0) + (stats.aerial_cables || 0) + (stats.duct_cables || 0);
+    } catch (e) {
+        console.error('Error loading stats:', e);
+    }
+}
+
+async function loadObjects() {
+    const objectType = document.getElementById('object-type-select').value;
+    const tbody = document.getElementById('objects-tbody');
+    
+    try {
+        const response = await fetch(`/api/objects/${objectType}`);
+        const objects = await response.json();
+        
+        if (objects.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center">Нет данных</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = objects.map(obj => `
+            <tr>
+                <td>${obj.id}</td>
+                <td>${obj.number || '-'}</td>
+                <td>${obj.state_name || '-'}</td>
+                <td>${new Date(obj.created_at).toLocaleDateString('ru-RU')}</td>
+                <td>
+                    <button class="btn btn-sm btn-secondary" onclick="viewObject('${objectType}', ${obj.id})">👁️</button>
+                    <button class="btn btn-sm btn-secondary" onclick="editObject('${objectType}', ${obj.id})">✏️</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-error">Ошибка загрузки</td></tr>';
+    }
+}
+
+async function loadReferences() {
+    // Load owners
+    try {
+        const ownersRes = await fetch('/api/owners');
+        const owners = await ownersRes.json();
+        const ownerSelect = document.getElementById('owner-select');
+        ownerSelect.innerHTML = '<option value="">-- Не выбран --</option>' + 
+            owners.map(o => `<option value="${o.id}">${o.organization_name}</option>`).join('');
+    } catch (e) {}
+    
+    // Load states
+    try {
+        const statesRes = await fetch('/api/references/object_states');
+        const states = await statesRes.json();
+        const stateSelect = document.getElementById('state-select');
+        stateSelect.innerHTML = '<option value="">-- Не выбрано --</option>' + 
+            states.map(s => `<option value="${s.id}">${s.description || s.name}</option>`).join('');
+    } catch (e) {}
+    
+    // Load well types
+    try {
+        const typesRes = await fetch('/api/references/well_types');
+        const types = await typesRes.json();
+        const typeSelect = document.getElementById('well-type-select');
+        typeSelect.innerHTML = '<option value="">-- Не выбран --</option>' + 
+            types.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+    } catch (e) {}
+}
+
+function showAddObjectModal() {
+    document.getElementById('add-object-modal').classList.add('show');
+    updateObjectForm();
+}
+
+function updateObjectForm() {
+    const type = document.getElementById('new-object-type').value;
+    const wellTypeGroup = document.getElementById('well-type-group');
+    const pointCoords = document.getElementById('point-coords');
+    
+    // Show/hide well type selector
+    wellTypeGroup.style.display = type === 'wells' ? 'block' : 'none';
+    
+    // Show/hide point coordinates (for points only)
+    const isPoint = ['wells', 'marker_posts'].includes(type);
+    pointCoords.style.display = isPoint ? 'flex' : 'none';
+}
+
+async function submitNewObject(event) {
+    event.preventDefault();
+    const form = event.target;
+    const formData = new FormData(form);
+    const objectType = formData.get('object_type');
+    
+    const data = {};
+    formData.forEach((value, key) => {
+        if (key !== 'object_type' && value) {
+            data[key] = value;
+        }
+    });
+    
+    try {
+        const response = await fetch(`/api/objects/${objectType}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showNotification('Объект создан', 'success');
+            closeModal('add-object-modal');
+            form.reset();
+            loadObjects();
+            loadStats();
+        } else {
+            showNotification(result.error || 'Ошибка создания', 'error');
+        }
+    } catch (e) {
+        showNotification('Ошибка сети', 'error');
+    }
+}
+
+function showImportModal() {
+    document.getElementById('import-modal').classList.add('show');
+}
+
+function switchImportTab(tab) {
+    document.querySelectorAll('.import-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.import-tabs .tab-btn').forEach(el => el.classList.remove('active'));
+    
+    document.getElementById(tab + '-import').classList.add('active');
+    event.target.classList.add('active');
+}
+
+function openAdminPanel() {
+    document.getElementById('admin-modal').classList.add('show');
+    loadAdminData();
+}
+
+function switchAdminTab(tab) {
+    document.querySelectorAll('.admin-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.admin-tabs .tab-btn').forEach(el => el.classList.remove('active'));
+    
+    document.getElementById('admin-' + tab).classList.add('active');
+    event.target.classList.add('active');
+}
+
+async function loadAdminData() {
+    // Load users
+    try {
+        const res = await fetch('/api/users');
+        const users = await res.json();
+        document.getElementById('users-tbody').innerHTML = users.map(u => `
+            <tr>
+                <td>${u.id}</td>
+                <td>${u.username}</td>
+                <td>${u.full_name || '-'}</td>
+                <td>${u.role_name}</td>
+                <td>${u.is_active ? '✅' : '❌'}</td>
+                <td>
+                    <button class="btn btn-sm btn-secondary" onclick="editUser(${u.id})">✏️</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {}
+    
+    // Load owners
+    try {
+        const res = await fetch('/api/owners');
+        const owners = await res.json();
+        document.getElementById('owners-tbody').innerHTML = owners.map(o => `
+            <tr>
+                <td>${o.id}</td>
+                <td>${o.organization_name}</td>
+                <td>${o.contact_person || '-'}</td>
+                <td>${o.phone || '-'}</td>
+                <td>${o.email || '-'}</td>
+            </tr>
+        `).join('');
+    } catch (e) {}
+    
+    // Load contracts
+    try {
+        const res = await fetch('/api/contracts');
+        const contracts = await res.json();
+        document.getElementById('contracts-tbody').innerHTML = contracts.map(c => `
+            <tr>
+                <td>${c.id}</td>
+                <td>${c.contract_number}</td>
+                <td>${c.contract_date}</td>
+                <td>${c.owner_name || '-'}</td>
+            </tr>
+        `).join('');
+    } catch (e) {}
+}
+
+function viewObject(type, id) {
+    window.location.href = `/map?layer=${type}&id=${id}`;
+}
+
+function editObject(type, id) {
+    // Open edit modal
+    console.log('Edit:', type, id);
+}
+</script>
+{% endblock %}
