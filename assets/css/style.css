@@ -881,7 +881,7 @@ tr:hover {
 /* Notifications */
 #notifications {
     position: fixed;
-    top: 70px;
+    bottom: 20px;
     right: 20px;
     z-index: 10001;
     display: flex;
