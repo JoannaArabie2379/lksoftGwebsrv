@@ -55,60 +55,23 @@ const MapManager = {
         this.map = L.map('map', {
             center: [66.101137, 76.641269], // Новый Уренгой (WGS84)
             zoom: 10,
-            zoomControl: false,
+            zoomControl: true,
         });
 
-        // Базовые подложки (тёмная по умолчанию)
-        this.baseLayerLight = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Базовый слой OpenStreetMap (светлая тема по умолчанию)
+        this.baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-            maxZoom: 19,
-        });
-        this.baseLayerDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
             maxZoom: 19,
         }).addTo(this.map);
 
-        // Переключатель темы карты (над зумом)
-        const ThemeControl = L.Control.extend({
-            options: { position: 'topleft' },
-            onAdd: () => {
-                const div = L.DomUtil.create('div', 'leaflet-control theme-toggle');
-                div.innerHTML = `
-                    <div class="theme-toggle-inner">
-                        <button type="button" class="theme-btn active" data-theme="dark">Тёмная</button>
-                        <button type="button" class="theme-btn" data-theme="light">Светлая</button>
-                    </div>
-                `;
-                L.DomEvent.disableClickPropagation(div);
-                div.querySelectorAll('.theme-btn').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        const theme = btn.dataset.theme;
-                        div.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b === btn));
-                        if (theme === 'light') {
-                            this.map.removeLayer(this.baseLayerDark);
-                            this.baseLayerLight.addTo(this.map);
-                        } else {
-                            this.map.removeLayer(this.baseLayerLight);
-                            this.baseLayerDark.addTo(this.map);
-                        }
-                    });
-                });
-                return div;
-            }
-        });
-        this.map.addControl(new ThemeControl());
-
-        // Зум контрол (под переключателем темы)
-        L.control.zoom({ position: 'topleft' }).addTo(this.map);
-
         // Инициализируем пустые слои
         this.layers = {
-            wells: L.layerGroup().addTo(this.map),
-            channels: L.layerGroup().addTo(this.map),
-            markers: L.layerGroup().addTo(this.map),
-            groundCables: L.layerGroup().addTo(this.map),
-            aerialCables: L.layerGroup().addTo(this.map),
-            ductCables: L.layerGroup().addTo(this.map),
+            wells: L.featureGroup().addTo(this.map),
+            channels: L.featureGroup().addTo(this.map),
+            markers: L.featureGroup().addTo(this.map),
+            groundCables: L.featureGroup().addTo(this.map),
+            aerialCables: L.featureGroup().addTo(this.map),
+            ductCables: L.featureGroup().addTo(this.map),
         };
 
         // Отслеживание координат курсора
@@ -490,10 +453,15 @@ const MapManager = {
             }
         };
 
-        Object.values(this.layers || {}).forEach(group => {
-            if (!group || typeof group.getLayers !== 'function') return;
-            group.getLayers().forEach(testLayer);
-        });
+        const traverse = (layer) => {
+            if (!layer) return;
+            if (typeof layer.getLayers === 'function') {
+                layer.getLayers().forEach(traverse);
+                return;
+            }
+            testLayer(layer);
+        };
+        Object.values(this.layers || {}).forEach(group => traverse(group));
 
         // Убираем дубликаты по (type,id)
         const uniq = new Map();
@@ -1007,7 +975,7 @@ const MapManager = {
             
             if (layerCount > 0) {
                 try {
-                    const bounds = layer.getBounds();
+                    const bounds = typeof layer.getBounds === 'function' ? layer.getBounds() : null;
                     if (bounds && bounds.isValid()) {
                         allBounds.push(bounds);
                         console.log(`Bounds для ${layerName}:`, bounds.toBBoxString());
