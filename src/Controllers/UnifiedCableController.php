@@ -720,6 +720,7 @@ class UnifiedCableController extends BaseController
         } catch (\PDOException $e) {
             // Безопасно возвращаем пустой слой вместо 500
             Response::geojson([], ['layer' => 'route_directions', 'count' => 0]);
+            return;
         }
 
         $features = [];

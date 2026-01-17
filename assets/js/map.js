@@ -25,6 +25,7 @@ const MapManager = {
     // Подсветка маршрута (направления) выбранного кабеля
     highlightLayer: null,
     lastClickHits: [],
+    hoverHits: [],
 
     // Цвета для слоёв
     colors: {
@@ -54,14 +55,51 @@ const MapManager = {
         this.map = L.map('map', {
             center: [66.101137, 76.641269], // Новый Уренгой (WGS84)
             zoom: 10,
-            zoomControl: true,
+            zoomControl: false,
         });
 
-        // Добавляем базовый слой OpenStreetMap
-        this.baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Базовые подложки (тёмная по умолчанию)
+        this.baseLayerLight = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
             maxZoom: 19,
+        });
+        this.baseLayerDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            maxZoom: 19,
         }).addTo(this.map);
+
+        // Переключатель темы карты (над зумом)
+        const ThemeControl = L.Control.extend({
+            options: { position: 'topleft' },
+            onAdd: () => {
+                const div = L.DomUtil.create('div', 'leaflet-control theme-toggle');
+                div.innerHTML = `
+                    <div class="theme-toggle-inner">
+                        <button type="button" class="theme-btn active" data-theme="dark">Тёмная</button>
+                        <button type="button" class="theme-btn" data-theme="light">Светлая</button>
+                    </div>
+                `;
+                L.DomEvent.disableClickPropagation(div);
+                div.querySelectorAll('.theme-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const theme = btn.dataset.theme;
+                        div.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b === btn));
+                        if (theme === 'light') {
+                            this.map.removeLayer(this.baseLayerDark);
+                            this.baseLayerLight.addTo(this.map);
+                        } else {
+                            this.map.removeLayer(this.baseLayerLight);
+                            this.baseLayerDark.addTo(this.map);
+                        }
+                    });
+                });
+                return div;
+            }
+        });
+        this.map.addControl(new ThemeControl());
+
+        // Зум контрол (под переключателем темы)
+        L.control.zoom({ position: 'topleft' }).addTo(this.map);
 
         // Инициализируем пустые слои
         this.layers = {
@@ -74,7 +112,10 @@ const MapManager = {
         };
 
         // Отслеживание координат курсора
-        this.map.on('mousemove', (e) => this.updateCursorCoordinates(e));
+        this.map.on('mousemove', (e) => {
+            this.updateCursorCoordinates(e);
+            this.updateHoverSnap(e.latlng);
+        });
 
         // Клик по карте
         this.map.on('click', (e) => this.onMapClick(e));
@@ -154,6 +195,7 @@ const MapManager = {
                         });
                     },
                     onEachFeature: (feature, layer) => {
+                        layer._igsMeta = { objectType: 'well', properties: feature.properties };
                         layer.on('click', (e) => {
                             // Проверяем режим добавления направления
                             if (this.addDirectionMode) {
@@ -168,8 +210,7 @@ const MapManager = {
                                 return;
                             }
                             L.DomEvent.stopPropagation(e);
-                            layer._igsMeta = { objectType: 'well', properties: feature.properties };
-                            this.handleObjectsClick(e.latlng);
+                            this.handleObjectsClick(e.latlng || layer.getLatLng());
                         });
                         
                         // Popup при наведении
@@ -218,6 +259,7 @@ const MapManager = {
                         opacity: 0.8,
                     }),
                     onEachFeature: (feature, layer) => {
+                        layer._igsMeta = { objectType: 'channel_direction', properties: feature.properties };
                         layer.on('click', async (e) => {
                             if (this.addDuctCableMode) {
                                 L.DomEvent.stopPropagation(e);
@@ -225,7 +267,6 @@ const MapManager = {
                                 return;
                             }
                             L.DomEvent.stopPropagation(e);
-                            layer._igsMeta = { objectType: 'channel_direction', properties: feature.properties };
                             this.handleObjectsClick(e.latlng);
                         });
                         
@@ -280,10 +321,10 @@ const MapManager = {
                         });
                     },
                     onEachFeature: (feature, layer) => {
+                        layer._igsMeta = { objectType: 'marker_post', properties: feature.properties };
                         layer.on('click', (e) => {
                             L.DomEvent.stopPropagation(e);
-                            layer._igsMeta = { objectType: 'marker_post', properties: feature.properties };
-                            this.handleObjectsClick(e.latlng);
+                            this.handleObjectsClick(e.latlng || layer.getLatLng());
                         });
                         
                         layer.bindTooltip(`
@@ -338,9 +379,9 @@ const MapManager = {
                         dashArray: type === 'aerial' ? '5, 5' : null,
                     }),
                     onEachFeature: (feature, layer) => {
+                        layer._igsMeta = { objectType: 'unified_cable', properties: feature.properties };
                         layer.on('click', (e) => {
                             L.DomEvent.stopPropagation(e);
-                            layer._igsMeta = { objectType: 'unified_cable', properties: feature.properties };
                             this.handleObjectsClick(e.latlng);
                         });
                         
@@ -419,7 +460,7 @@ const MapManager = {
             if (typeof layer.getLatLng === 'function') {
                 const pt = this.map.latLngToLayerPoint(layer.getLatLng());
                 const d = Math.hypot(clickPt.x - pt.x, clickPt.y - pt.y);
-                const thr = 12;
+                const thr = 18;
                 if (d <= thr) {
                     hits.push({
                         objectType: meta.objectType,
@@ -439,7 +480,7 @@ const MapManager = {
                 for (let i = 0; i < pts.length - 1; i++) {
                     minD = Math.min(minD, distToSeg(clickPt, pts[i], pts[i + 1]));
                 }
-                if (minD <= 8) {
+                if (minD <= 12) {
                     hits.push({
                         objectType: meta.objectType,
                         properties: props,
@@ -461,6 +502,20 @@ const MapManager = {
             if (!uniq.has(key)) uniq.set(key, h);
         });
         return Array.from(uniq.values());
+    },
+
+    updateHoverSnap(latlng) {
+        if (!this.map) return;
+        // Не мешаем режимам добавления
+        if (this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode) return;
+
+        const hits = this.getObjectsAtLatLng(latlng);
+        const container = this.map.getContainer();
+        if (hits.length > 0) {
+            container.style.cursor = 'pointer';
+        } else if (container.style.cursor === 'pointer') {
+            container.style.cursor = '';
+        }
     },
 
     /**

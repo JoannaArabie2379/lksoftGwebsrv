@@ -1010,8 +1010,8 @@ tr:hover {
 /* Map Toolbar */
 .map-toolbar {
     position: absolute;
-    bottom: 10px;
-    left: 10px;
+    top: 10px;
+    left: 60px; /* рядом с кнопками зума */
     z-index: 500;
     display: flex;
     gap: 8px;
@@ -1078,8 +1078,8 @@ tr:hover {
     }
     
     .map-toolbar {
-        bottom: 5px;
-        left: 5px;
+        top: 5px;
+        left: 55px;
         padding: 5px;
     }
     
@@ -1088,4 +1088,32 @@ tr:hover {
         padding: 8px 12px;
         font-size: 12px;
     }
+}
+
+/* Переключатель темы карты (Leaflet control) */
+.leaflet-control.theme-toggle {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 6px;
+    margin-top: 10px;
+}
+.theme-toggle-inner {
+    display: flex;
+    gap: 6px;
+}
+.theme-btn {
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.theme-btn.active {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+    color: #fff;
 }
