@@ -18,6 +18,10 @@ const MapManager = {
     addCableTypeCode: null, // cable_ground | cable_aerial
     selectedCablePoints: [],
 
+    // Режим добавления кабеля в канализации (выбор каналов)
+    addDuctCableMode: false,
+    selectedDuctCableChannels: [],
+
     // Цвета для слоёв
     colors: {
         wells: '#3498db',
@@ -208,7 +212,14 @@ const MapManager = {
                         opacity: 0.8,
                     }),
                     onEachFeature: (feature, layer) => {
-                        layer.on('click', () => this.showObjectInfo('channel_direction', feature.properties));
+                        layer.on('click', async (e) => {
+                            if (this.addDuctCableMode) {
+                                L.DomEvent.stopPropagation(e);
+                                await this.handleDirectionClickForDuctCable(feature.properties?.id);
+                                return;
+                            }
+                            this.showObjectInfo('channel_direction', feature.properties);
+                        });
                         
                         layer.bindTooltip(`
                             <strong>Направление: ${feature.properties.number}</strong><br>
@@ -499,6 +510,114 @@ const MapManager = {
         }
     },
 
+    startAddDuctCableMode() {
+        this.addDuctCableMode = true;
+        this.selectedDuctCableChannels = [];
+        this.map.getContainer().style.cursor = 'crosshair';
+
+        const statusEl = document.getElementById('add-mode-status');
+        const textEl = document.getElementById('add-mode-text');
+        const finishBtn = document.getElementById('btn-finish-add-mode');
+        statusEl.classList.remove('hidden');
+        if (finishBtn) finishBtn.classList.remove('hidden');
+        textEl.textContent = 'Кликните на направлениях и выберите каналы. Затем нажмите «Создать»';
+
+        App.notify('Режим добавления кабеля в канализации: выберите каналы', 'info');
+    },
+
+    cancelAddDuctCableMode() {
+        if (!this.addDuctCableMode) return;
+        this.addDuctCableMode = false;
+        this.selectedDuctCableChannels = [];
+        this.map.getContainer().style.cursor = '';
+
+        const finishBtn = document.getElementById('btn-finish-add-mode');
+        if (finishBtn) finishBtn.classList.add('hidden');
+
+        if (!this.addDirectionMode && !this.addingObject && !this.addCableMode) {
+            document.getElementById('add-mode-status').classList.add('hidden');
+        }
+    },
+
+    async handleDirectionClickForDuctCable(directionId) {
+        if (!directionId) return;
+        try {
+            const resp = await API.channelDirections.get(directionId);
+            if (!resp || resp.success === false) {
+                App.notify(resp?.message || 'Ошибка загрузки направления', 'error');
+                return;
+            }
+            const dir = resp.data || resp;
+            const channels = dir.channels || [];
+
+            const content = `
+                <form id="duct-cable-channels-form">
+                    <p><strong>${dir.number || 'Направление'}</strong></p>
+                    <div style="max-height: 220px; overflow-y: auto; border: 1px solid var(--border-color); padding: 8px; border-radius: 6px;">
+                        ${channels.length ? channels.map(ch => `
+                            <label style="display:block; margin-bottom:6px;">
+                                <input type="checkbox" name="channel_ids" value="${ch.id}">
+                                Канал ${ch.channel_number}${ch.kind_name ? ` (${ch.kind_name})` : ''}
+                            </label>
+                        `).join('') : '<p class="text-muted">В направлении нет каналов</p>'}
+                    </div>
+                </form>
+            `;
+
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="MapManager.addSelectedDuctChannelsFromModal()">Добавить</button>
+            `;
+
+            App.showModal('Выбор каналов', content, footer);
+        } catch (e) {
+            console.error('Ошибка выбора каналов:', e);
+            App.notify('Ошибка загрузки направления', 'error');
+        }
+    },
+
+    addSelectedDuctChannelsFromModal() {
+        const form = document.getElementById('duct-cable-channels-form');
+        if (!form) return;
+        const ids = Array.from(form.querySelectorAll('input[name="channel_ids"]:checked')).map(i => parseInt(i.value));
+        ids.forEach(id => {
+            if (!this.selectedDuctCableChannels.includes(id)) this.selectedDuctCableChannels.push(id);
+        });
+
+        App.hideModal();
+        const textEl = document.getElementById('add-mode-text');
+        if (textEl) textEl.textContent = `Выбрано каналов: ${this.selectedDuctCableChannels.length}. Нажмите «Создать»`;
+        App.notify(`Выбрано каналов: ${this.selectedDuctCableChannels.length}`, 'success');
+    },
+
+    finishAddCableMode() {
+        // Если активен режим duct — создаём duct кабель
+        if (this.addDuctCableMode) {
+            if (this.selectedDuctCableChannels.length < 1) {
+                App.notify('Выберите минимум 1 канал', 'warning');
+                return;
+            }
+            const selected = [...this.selectedDuctCableChannels];
+            this.cancelAddDuctCableMode();
+            App.showAddDuctCableModalFromMap(selected);
+            return;
+        }
+
+        // Иначе — обычный режим ломаной (грунт/воздух)
+        if (!this.addCableMode) return;
+        if (this.selectedCablePoints.length < 2) {
+            App.notify('Нужно указать минимум 2 точки', 'warning');
+            return;
+        }
+
+        const typeCode = this.addCableTypeCode;
+        const coords = [...this.selectedCablePoints];
+
+        this.cancelAddCableMode();
+
+        App.showAddCableModalFromMap(typeCode, coords);
+    },
+
     /**
      * Клик по карте в режиме добавления кабеля
      */
@@ -530,24 +649,6 @@ const MapManager = {
 
         const textEl = document.getElementById('add-mode-text');
         if (textEl) textEl.textContent = `Точек: ${this.selectedCablePoints.length}. Нажмите «Создать» когда готово`;
-    },
-
-    /**
-     * Завершить режим добавления кабеля и открыть форму
-     */
-    finishAddCableMode() {
-        if (!this.addCableMode) return;
-        if (this.selectedCablePoints.length < 2) {
-            App.notify('Нужно указать минимум 2 точки', 'warning');
-            return;
-        }
-
-        const typeCode = this.addCableTypeCode;
-        const coords = [...this.selectedCablePoints];
-
-        this.cancelAddCableMode();
-
-        App.showAddCableModalFromMap(typeCode, coords);
     },
 
     /**

@@ -156,10 +156,12 @@ const App = {
         document.getElementById('btn-add-well-map')?.addEventListener('click', () => MapManager.startAddingObject('wells'));
         document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
         document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
+        document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => MapManager.startAddDuctCableMode());
         document.getElementById('btn-cancel-add-mode')?.addEventListener('click', () => {
             MapManager.cancelAddDirectionMode();
             MapManager.cancelAddingObject();
             MapManager.cancelAddCableMode();
+            MapManager.cancelAddDuctCableMode();
         });
         document.getElementById('btn-finish-add-mode')?.addEventListener('click', () => MapManager.finishAddCableMode());
     },
@@ -2414,6 +2416,36 @@ const App = {
                     x.value = pt[0];
                     y.value = pt[1];
                 }
+            });
+        }
+    },
+
+    /**
+     * Открыть добавление duct-кабеля из карты с уже выбранными каналами маршрута
+     */
+    async showAddDuctCableModalFromMap(channelIds) {
+        this.showAddObjectModal('unified_cables');
+
+        await new Promise(r => setTimeout(r, 200));
+
+        const typeSelect = document.getElementById('modal-cable-object-type');
+        if (typeSelect) {
+            const opt = Array.from(typeSelect.options).find(o => o.dataset && o.dataset.code === 'cable_duct');
+            if (opt) {
+                typeSelect.value = opt.value;
+                this.onCableObjectTypeChange();
+            }
+        }
+
+        // Даём загрузиться опциям маршрута
+        await new Promise(r => setTimeout(r, 200));
+
+        const channelsSelect = document.getElementById('cable-route-channels');
+        if (channelsSelect && Array.isArray(channelIds)) {
+            const set = new Set(channelIds.map(v => parseInt(v)));
+            Array.from(channelsSelect.options).forEach(opt => {
+                const id = parseInt(opt.value);
+                opt.selected = set.has(id);
             });
         }
     },
