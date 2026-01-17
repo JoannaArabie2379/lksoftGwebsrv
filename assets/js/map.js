@@ -28,6 +28,10 @@ const MapManager = {
     hoverHits: [],
     incidentSelectMode: false,
 
+    // Подписи колодцев
+    wellLabelsEnabled: true,
+    wellLabelsLayer: null,
+
     // Цвета для слоёв
     colors: {
         wells: '#fa00fa',
@@ -93,6 +97,9 @@ const MapManager = {
             aerialCables: L.featureGroup().addTo(this.map),
             ductCables: L.featureGroup().addTo(this.map),
         };
+
+        // Отдельный слой подписей колодцев (вкл/выкл через панель инструментов)
+        this.wellLabelsLayer = L.featureGroup().addTo(this.map);
 
         // Отслеживание координат курсора
         this.map.on('mousemove', (e) => {
@@ -165,6 +172,7 @@ const MapManager = {
             }
             
             this.layers.wells.clearLayers();
+            if (this.wellLabelsLayer) this.wellLabelsLayer.clearLayers();
             
             // Фильтруем features с невалидной геометрией
             const validFeatures = response.features.filter(f => f && f.geometry && f.geometry.type);
@@ -210,18 +218,19 @@ const MapManager = {
                             this.handleObjectsClick(e.latlng || layer.getLatLng());
                         });
 
-                        // Подпись номера над колодцем
-                        if (feature?.properties?.number) {
+                        // Подпись номера над колодцем (отдельный слой)
+                        if (this.wellLabelsEnabled && this.wellLabelsLayer && feature?.properties?.number) {
                             const labelColor = feature.properties.status_color || this.colors.wells;
                             const label = L.marker(layer.getLatLng(), {
                                 interactive: false,
                                 keyboard: false,
                                 icon: L.divIcon({
                                     className: 'well-number-label',
-                                    html: `<span style="color:${labelColor}">${feature.properties.number}</span>`,
+                                    html: `<div class="well-number-label-text" style="color:${labelColor}">${feature.properties.number}</div>`,
+                                    iconAnchor: [0, 0],
                                 }),
                             });
-                            label.addTo(this.layers.wells);
+                            label.addTo(this.wellLabelsLayer);
                         }
                         
                         // Popup при наведении
@@ -235,6 +244,24 @@ const MapManager = {
             }
         } catch (error) {
             console.error('Ошибка загрузки колодцев:', error);
+        }
+    },
+
+    setWellLabelsEnabled(enabled) {
+        this.wellLabelsEnabled = !!enabled;
+        if (!this.map || !this.wellLabelsLayer) return;
+        if (this.wellLabelsEnabled) {
+            this.map.addLayer(this.wellLabelsLayer);
+        } else {
+            this.map.removeLayer(this.wellLabelsLayer);
+        }
+    },
+
+    toggleWellLabels() {
+        this.setWellLabelsEnabled(!this.wellLabelsEnabled);
+        // Перерисовываем подписи при включении
+        if (this.wellLabelsEnabled) {
+            this.loadWells();
         }
     },
 
@@ -689,7 +716,7 @@ const MapManager = {
             const resp = await API.unifiedCables.routeDirectionsGeojson(cableId);
             if (resp && resp.type === 'FeatureCollection') {
                 this.highlightLayer = L.geoJSON(resp, {
-                    style: () => ({ color: '#ef4444', weight: 4, opacity: 0.9 })
+                    style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' })
                 }).addTo(this.map);
                 this.setHighlightBarVisible(true);
                 const bounds = this.highlightLayer.getBounds();

@@ -52,13 +52,6 @@ class ReferenceController extends BaseController
             'fields' => ['cable_type_id', 'fiber_count', 'marking', 'description'],
             'search' => ['marking'],
         ],
-        'display_styles' => [
-            'table' => 'display_styles',
-            'fields' => ['code', 'name', 'style_type', 'is_default', 'marker_icon', 'marker_size', 'marker_color', 
-                        'marker_opacity', 'stroke_color', 'stroke_width', 'stroke_opacity', 'stroke_dasharray',
-                        'fill_color', 'fill_opacity', 'object_type_id', 'object_kind_id', 'object_status_id', 'owner_id'],
-            'search' => ['code', 'name'],
-        ],
     ];
 
     /**
@@ -208,7 +201,6 @@ class ReferenceController extends BaseController
             'contracts' => ['number', 'name'],
             'cable_types' => ['code', 'name'],
             'cable_catalog' => ['cable_type_id', 'marking'],
-            'display_styles' => ['code', 'name', 'style_type'],
         ];
         
         return $required[$type] ?? ['name'];
@@ -350,7 +342,6 @@ class ReferenceController extends BaseController
             'contracts' => 'Контракты',
             'cable_types' => 'Типы кабелей',
             'cable_catalog' => 'Каталог кабелей',
-            'display_styles' => 'Стили отображения',
         ];
         return $names[$type] ?? $type;
     }

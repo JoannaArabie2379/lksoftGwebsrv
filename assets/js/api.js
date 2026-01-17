@@ -63,14 +63,26 @@ const API = {
 
         try {
             const response = await fetch(url, config);
-            const data = await response.json();
+            const contentType = response.headers.get('content-type') || '';
+
+            let data = null;
+            if (contentType.includes('application/json')) {
+                data = await response.json();
+            } else {
+                // например, nginx 413 отдаёт HTML
+                const text = await response.text();
+                data = { success: false, message: text ? 'Ошибка ответа сервера' : 'Ошибка запроса' };
+            }
 
             if (!response.ok) {
                 if (response.status === 401) {
                     this.clearToken();
                     window.location.reload();
                 }
-                throw new Error(data.message || 'Ошибка запроса');
+                if (response.status === 413) {
+                    throw new Error('Файл слишком большой (413). Уменьшите размер или увеличьте лимит на сервере.');
+                }
+                throw new Error(data?.message || `Ошибка запроса (${response.status})`);
             }
 
             return data;

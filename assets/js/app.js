@@ -178,6 +178,10 @@ const App = {
         document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
         document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
         document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => MapManager.startAddDuctCableMode());
+        document.getElementById('btn-toggle-well-labels')?.addEventListener('click', (e) => {
+            MapManager.toggleWellLabels();
+            e.currentTarget.classList.toggle('active', MapManager.wellLabelsEnabled);
+        });
         document.getElementById('btn-cancel-add-mode')?.addEventListener('click', () => {
             MapManager.cancelAddDirectionMode();
             MapManager.cancelAddingObject();
@@ -1018,6 +1022,12 @@ const App = {
                             <select name="status_id" id="modal-status-select" data-value="${obj.status_id || ''}"></select>
                         </div>
                         <div class="form-group">
+                            <label>Контракт</label>
+                            <select name="contract_id" id="modal-contract-select" data-value="${obj.contract_id || ''}">
+                                <option value="">Не указан</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label>Дата установки</label>
                             <input type="date" name="installation_date" value="${obj.installation_date || ''}">
                         </div>
@@ -1248,7 +1258,7 @@ const App = {
             }
             
             // Затем устанавливаем остальные значения
-            const selects = ['modal-owner-select', 'modal-kind-select', 'modal-status-select', 'modal-cable-type-select', 'modal-cable-catalog-select'];
+            const selects = ['modal-owner-select', 'modal-kind-select', 'modal-status-select', 'modal-contract-select', 'modal-cable-type-select', 'modal-cable-catalog-select'];
             selects.forEach(selectId => {
                 const select = document.getElementById(selectId);
                 if (select && select.dataset.value) {
@@ -1898,6 +1908,12 @@ const App = {
      */
     async showReference(type) {
         this.currentReference = type;
+
+        // Справочник display_styles удалён
+        if (type === 'display_styles') {
+            this.notify('Справочник удалён', 'warning');
+            return;
+        }
         
         document.querySelector('.references-grid').classList.add('hidden');
         document.getElementById('reference-content').classList.remove('hidden');
@@ -1910,7 +1926,6 @@ const App = {
             contracts: 'Контракты',
             cable_types: 'Типы кабелей',
             cable_catalog: 'Каталог кабелей',
-            display_styles: 'Стили отображения',
         };
         
         document.getElementById('ref-title').textContent = titles[type] || type;
@@ -2423,6 +2438,7 @@ const App = {
             if (objectType === 'unified_cables') {
                 promises.push(API.references.all('cable_types'));
                 promises.push(API.unifiedCables.objectTypes());
+                promises.push(API.references.all('contracts'));
             }
 
             const results = await Promise.all(promises);
@@ -2493,6 +2509,19 @@ const App = {
             if (statuses.success && document.getElementById('modal-status-select')) {
                 document.getElementById('modal-status-select').innerHTML = 
                     statuses.data.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            }
+
+            // Контракты (для кабеля при редактировании)
+            const contractSelect = document.getElementById('modal-contract-select');
+            if (objectType === 'unified_cables' && contractSelect) {
+                const contractsResp = results.find(r => r?.data && Array.isArray(r.data) && r.data[0]?.number !== undefined && r.data[0]?.name !== undefined) || null;
+                // Если не удалось эвристикой — берём по индексу (owners/types/kinds/statuses + cable_types + objectTypes + contracts)
+                const idxContracts = 6; // 0..3 base, 4 cable_types, 5 objectTypes, 6 contracts
+                const cResp = results[idxContracts] || contractsResp;
+                if (cResp?.success) {
+                    contractSelect.innerHTML = '<option value="">Не указан</option>' +
+                        cResp.data.map(c => `<option value="${c.id}">${c.number} — ${c.name}</option>`).join('');
+                }
             }
 
             // Для направлений - загружаем колодцы
@@ -3210,7 +3239,7 @@ const App = {
                 <hr>
                 <h4>Связанные объекты</h4>
                 <div id="incident-related-objects" class="text-muted">Нет объектов</div>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="MapManager.startIncidentSelectMode()" style="margin-top: 8px;">
+                <button type="button" class="btn btn-sm btn-secondary" onclick="App.startIncidentSelectFromCreate()" style="margin-top: 8px;">
                     <i class="fas fa-crosshairs"></i> Указать объект на карте
                 </button>
             </form>
@@ -3223,6 +3252,15 @@ const App = {
 
         this.showModal('Создать инцидент', content, footer);
         this.renderIncidentRelatedObjects();
+    },
+
+    startIncidentSelectFromCreate() {
+        const form = document.getElementById('incident-form');
+        const draft = form ? Object.fromEntries(new FormData(form).entries()) : {};
+        this._incidentCreatePick = { draft, related: [...(this.incidentDraftRelatedObjects || [])] };
+        this.hideModal();
+        this.switchPanel('map');
+        MapManager.startIncidentSelectMode();
     },
 
     /**
@@ -3286,6 +3324,50 @@ const App = {
             this.notify(`Добавлен объект: ${this.getIncidentObjectTypeName(type)} ${p.number || p.id}`, 'success');
         }
         this.renderIncidentRelatedObjects();
+
+        // Если выбирали объект из режима создания инцидента — возвращаемся в модалку
+        if (this._incidentCreatePick) {
+            const pick = this._incidentCreatePick;
+            pick.related = [...this.incidentDraftRelatedObjects];
+            this.showAddIncidentModal();
+            const f = document.getElementById('incident-form');
+            if (f) {
+                Object.entries(pick.draft || {}).forEach(([k, v]) => {
+                    const el = f.querySelector(`[name="${k}"]`);
+                    if (el) el.value = v;
+                });
+            }
+            this.incidentDraftRelatedObjects = pick.related || [];
+            this.renderIncidentRelatedObjects();
+            this._incidentCreatePick = null;
+            return;
+        }
+
+        // Если выбирали объект из режима редактирования инцидента — возвращаемся в модалку
+        if (this._incidentEditPick?.id) {
+            const pick = this._incidentEditPick;
+            pick.related = [...this.incidentDraftRelatedObjects];
+            (async () => {
+                try {
+                    const resp = await API.incidents.get(pick.id);
+                    if (!resp?.success) return;
+                    this.showEditIncidentModal(resp.data);
+
+                    // восстанавливаем draft полей формы
+                    const f = document.getElementById('incident-edit-form');
+                    if (f) {
+                        Object.entries(pick.draft || {}).forEach(([k, v]) => {
+                            const el = f.querySelector(`[name="${k}"]`);
+                            if (el) el.value = v;
+                        });
+                    }
+                    this.incidentDraftRelatedObjects = pick.related || [];
+                    this.renderIncidentRelatedObjects();
+                } finally {
+                    this._incidentEditPick = null;
+                }
+            })();
+        }
     },
 
     renderIncidentRelatedObjects() {
@@ -3563,65 +3645,6 @@ const App = {
                 <div class="form-group">
                     <label>Описание</label>
                     <textarea name="description" rows="2">${data.description || ''}</textarea>
-                </div>
-            `,
-            'display_styles': `
-                <div class="form-group">
-                    <label>Код *</label>
-                    <input type="text" name="code" value="${data.code || ''}" required>
-                </div>
-                <div class="form-group">
-                    <label>Название *</label>
-                    <input type="text" name="name" value="${data.name || ''}" required>
-                </div>
-                <div class="form-group">
-                    <label>Тип стиля *</label>
-                    <select name="style_type" required>
-                        <option value="point" ${data.style_type === 'point' ? 'selected' : ''}>Точка</option>
-                        <option value="line" ${data.style_type === 'line' ? 'selected' : ''}>Линия</option>
-                        <option value="polygon" ${data.style_type === 'polygon' ? 'selected' : ''}>Полигон</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" name="is_default" ${data.is_default ? 'checked' : ''}> По умолчанию</label>
-                </div>
-                <hr>
-                <h4>Стиль маркера</h4>
-                <div class="form-group">
-                    <label>Иконка</label>
-                    <input type="text" name="marker_icon" value="${data.marker_icon || ''}">
-                </div>
-                <div class="form-group">
-                    <label>Размер</label>
-                    <input type="number" name="marker_size" value="${data.marker_size || 24}">
-                </div>
-                <div class="form-group">
-                    <label>Цвет маркера</label>
-                    <input type="color" name="marker_color" value="${data.marker_color || '#3498db'}">
-                </div>
-                <hr>
-                <h4>Стиль линии</h4>
-                <div class="form-group">
-                    <label>Цвет обводки</label>
-                    <input type="color" name="stroke_color" value="${data.stroke_color || '#2980b9'}">
-                </div>
-                <div class="form-group">
-                    <label>Толщина</label>
-                    <input type="number" name="stroke_width" value="${data.stroke_width || 2}">
-                </div>
-                <div class="form-group">
-                    <label>Пунктир (dasharray)</label>
-                    <input type="text" name="stroke_dasharray" value="${data.stroke_dasharray || ''}" placeholder="5,5">
-                </div>
-                <hr>
-                <h4>Стиль заливки</h4>
-                <div class="form-group">
-                    <label>Цвет заливки</label>
-                    <input type="color" name="fill_color" value="${data.fill_color || '#3498db'}">
-                </div>
-                <div class="form-group">
-                    <label>Прозрачность (0-1)</label>
-                    <input type="number" name="fill_opacity" step="0.1" min="0" max="1" value="${data.fill_opacity || 0.5}">
                 </div>
             `,
         };
@@ -3903,7 +3926,7 @@ const App = {
                 <hr>
                 <h4>Связанные объекты</h4>
                 <div id="incident-related-objects" class="text-muted">Нет объектов</div>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="MapManager.startIncidentSelectMode()" style="margin-top: 8px;">
+                <button type="button" class="btn btn-sm btn-secondary" onclick="App.startIncidentSelectFromEdit(${incident.id})" style="margin-top: 8px;">
                     <i class="fas fa-crosshairs"></i> Добавить объект с карты
                 </button>
                 <hr>
@@ -3949,6 +3972,20 @@ const App = {
         this.renderIncidentRelatedObjects();
         this.loadObjectPhotos('incidents', incident.id).catch(() => {});
         this.loadIncidentDocuments(incident.id).catch(() => {});
+    },
+
+    startIncidentSelectFromEdit(incidentId) {
+        const form = document.getElementById('incident-edit-form');
+        const draft = form ? Object.fromEntries(new FormData(form).entries()) : {};
+        this._incidentEditPick = {
+            id: incidentId,
+            draft,
+            related: [...(this.incidentDraftRelatedObjects || [])],
+        };
+
+        this.hideModal();
+        this.switchPanel('map');
+        MapManager.startIncidentSelectMode();
     },
 
     async submitIncidentUpdate(id) {
