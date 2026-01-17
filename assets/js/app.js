@@ -1989,12 +1989,6 @@ const App = {
                     <!-- Блок для кабелей в канализации (маршрут) -->
                     <div id="cable-route-block" style="display: none;">
                         <div class="form-group">
-                            <label>Колодцы маршрута</label>
-                            <select multiple id="cable-route-wells" style="height: 100px; width: 100%;">
-                            </select>
-                            <p class="text-muted">Удерживайте Ctrl для выбора нескольких</p>
-                        </div>
-                        <div class="form-group">
                             <label>Каналы маршрута</label>
                             <select multiple id="cable-route-channels" style="height: 100px; width: 100%;">
                             </select>
@@ -2310,10 +2304,8 @@ const App = {
                         data.coordinate_system = document.getElementById('cable-coord-system')?.value || 'wgs84';
                     } else if (objectTypeCode === 'cable_duct') {
                         // Для кабелей в канализации - собираем маршрут
-                        const wellsSelect = document.getElementById('cable-route-wells');
                         const channelsSelect = document.getElementById('cable-route-channels');
                         
-                        data.route_wells = Array.from(wellsSelect?.selectedOptions || []).map(o => parseInt(o.value));
                         data.route_channels = Array.from(channelsSelect?.selectedOptions || []).map(o => parseInt(o.value));
                     }
                     
@@ -2511,18 +2503,8 @@ const App = {
      */
     async loadCableRouteOptions() {
         try {
-            const [wellsResponse, channelsResponse] = await Promise.all([
-                API.wells.list({ limit: 1000 }),
-                API.cableChannels.list({ limit: 1000 })
-            ]);
-            
-            const wellsSelect = document.getElementById('cable-route-wells');
+            const channelsResponse = await API.cableChannels.list({ limit: 1000 });
             const channelsSelect = document.getElementById('cable-route-channels');
-            
-            if (wellsSelect && wellsResponse.success !== false) {
-                const wells = wellsResponse.data || wellsResponse;
-                wellsSelect.innerHTML = wells.map(w => `<option value="${w.id}">${w.number}</option>`).join('');
-            }
             
             if (channelsSelect && channelsResponse.success !== false) {
                 const channels = channelsResponse.data || channelsResponse;

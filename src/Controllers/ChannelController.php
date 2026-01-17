@@ -261,6 +261,15 @@ class ChannelController extends BaseController
             $stmt = $this->db->query($sql, $data);
             $id = $stmt->fetchColumn();
 
+            // Автоматически создаём 1 канал по умолчанию (диаметр 110)
+            $this->db->insert('cable_channels', [
+                'direction_id' => $id,
+                'channel_number' => 1,
+                'diameter_mm' => 110,
+                'created_by' => $user['id'],
+                'updated_by' => $user['id'],
+            ]);
+
             $this->db->commit();
 
             $direction = $this->db->fetch(
@@ -323,8 +332,16 @@ class ChannelController extends BaseController
             Response::error('Направление не найдено', 404);
         }
 
+        // Если есть каналы — не даём удалить направление
+        $channels = $this->db->fetch(
+            "SELECT COUNT(*) as cnt FROM cable_channels WHERE direction_id = :id",
+            ['id' => $directionId]
+        );
+        if (!empty($channels['cnt']) && (int) $channels['cnt'] > 0) {
+            Response::error('Направление используется', 400);
+        }
+
         try {
-            // Каналы удалятся каскадно
             $this->db->delete('object_photos', "object_table = 'channel_directions' AND object_id = :id", ['id' => $directionId]);
             $this->db->delete('channel_directions', 'id = :id', ['id' => $directionId]);
 
@@ -503,10 +520,17 @@ class ChannelController extends BaseController
             Response::error('Канал не найден', 404);
         }
 
-        $this->db->delete('cable_channels', 'id = :id', ['id' => $channelId]);
+        try {
+            $this->db->delete('cable_channels', 'id = :id', ['id' => $channelId]);
 
-        $this->log('delete', 'cable_channels', $channelId, $channel, null);
+            $this->log('delete', 'cable_channels', $channelId, $channel, null);
 
-        Response::success(null, 'Канал удалён');
+            Response::success(null, 'Канал удалён');
+        } catch (\PDOException $e) {
+            if (strpos($e->getMessage(), 'foreign key') !== false) {
+                Response::error('Направление используется', 400);
+            }
+            throw $e;
+        }
     }
 }

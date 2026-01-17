@@ -225,6 +225,16 @@ class UnifiedCableController extends BaseController
             $data['number'] = null;
         }
 
+        // Для безопасности: если в БД number NOT NULL/UNIQUE, подставляем временное значение
+        $ownerCodeForNumber = '';
+        if (!empty($data['owner_id'])) {
+            $ownerTmp = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
+            $ownerCodeForNumber = $ownerTmp['code'] ?? '';
+        }
+        if ($ownerCodeForNumber && empty($data['number'])) {
+            $data['number'] = "КАБ-{$ownerCodeForNumber}-TMP-" . date('YmdHis') . '-' . random_int(100, 999);
+        }
+
         // Убедиться, что все необязательные поля присутствуют (даже если null)
         $optionalFields = ['contract_id', 'length_declared', 'installation_date', 'notes'];
         foreach ($optionalFields as $field) {
@@ -249,7 +259,15 @@ class UnifiedCableController extends BaseController
                 }
 
                 $coordinateSystem = $this->request->input('coordinate_system', 'wgs84');
-                $coordsStr = implode(', ', array_map(fn($p) => "{$p[0]} {$p[1]}", $coordinates));
+                // Проверяем корректность координат и формируем строку
+                $cleanCoords = [];
+                foreach ($coordinates as $p) {
+                    if (!is_array($p) || count($p) < 2 || !is_numeric($p[0]) || !is_numeric($p[1])) {
+                        Response::error('Некорректные координаты кабеля', 422);
+                    }
+                    $cleanCoords[] = [(float) $p[0], (float) $p[1]];
+                }
+                $coordsStr = implode(', ', array_map(fn($p) => "{$p[0]} {$p[1]}", $cleanCoords));
 
                 if ($coordinateSystem === 'wgs84') {
                     $sql = "INSERT INTO cables (number, geom_wgs84, geom_msk86, cable_catalog_id, cable_type_id, 
@@ -284,22 +302,37 @@ class UnifiedCableController extends BaseController
                 // Кабель в канализации - без геометрии, но с маршрутом
                 $id = $this->db->insert('cables', $data);
                 
-                // Добавляем колодцы маршрута
-                $routeWells = $this->request->input('route_wells', []);
-                foreach ($routeWells as $order => $wellId) {
-                    $this->db->insert('cable_route_wells', [
-                        'cable_id' => $id,
-                        'well_id' => $wellId,
-                        'route_order' => $order
-                    ]);
-                }
-                
                 // Добавляем каналы маршрута
                 $routeChannels = $this->request->input('route_channels', []);
                 foreach ($routeChannels as $order => $channelId) {
                     $this->db->insert('cable_route_channels', [
                         'cable_id' => $id,
                         'cable_channel_id' => $channelId,
+                        'route_order' => $order
+                    ]);
+                }
+
+                // Автоматически добавляем колодцы маршрута по направлениям выбранных каналов
+                $routeWells = [];
+                if (!empty($routeChannels)) {
+                    $rows = $this->db->fetchAll(
+                        "SELECT cd.start_well_id, cd.end_well_id
+                         FROM cable_channels cc
+                         JOIN channel_directions cd ON cc.direction_id = cd.id
+                         WHERE cc.id IN (" . implode(',', array_map('intval', $routeChannels)) . ")"
+                    );
+                    foreach ($rows as $r) {
+                        foreach ([(int) $r['start_well_id'], (int) $r['end_well_id']] as $wid) {
+                            if ($wid > 0 && !in_array($wid, $routeWells, true)) {
+                                $routeWells[] = $wid;
+                            }
+                        }
+                    }
+                }
+                foreach ($routeWells as $order => $wellId) {
+                    $this->db->insert('cable_route_wells', [
+                        'cable_id' => $id,
+                        'well_id' => $wellId,
                         'route_order' => $order
                     ]);
                 }
