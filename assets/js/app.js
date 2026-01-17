@@ -741,7 +741,7 @@ const App = {
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер</label>
-                            <input type="text" name="number" value="${obj.number || ''}">
+                            <input type="text" name="number" value="${obj.number || obj.id || ''}" disabled style="background: var(--bg-tertiary);">
                         </div>
                         <div class="form-group">
                             <label>Название *</label>
@@ -1567,12 +1567,17 @@ const App = {
         let formHtml = '';
 
         if (type === 'wells' || type === 'markers') {
+            const numberPrefixLabel = type === 'wells' ? 'ККС' : 'СТ';
             formHtml = `
                 <form id="add-object-form">
                     <input type="hidden" name="object_type_code" value="${objectTypeCodes[type] || ''}">
                     <div class="form-group">
                         <label>Номер *</label>
-                        <input type="text" name="number" required>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 180px; background: var(--bg-tertiary);" value="${numberPrefixLabel}-">
+                            <input type="text" name="number_suffix" id="modal-number-suffix" required placeholder="Например: ТУ-01" style="flex: 1;">
+                        </div>
+                        <p class="text-muted">Префикс формируется автоматически по собственнику</p>
                     </div>
                     <div class="form-group">
                         <label>Система координат</label>
@@ -1691,7 +1696,7 @@ const App = {
                 <form id="add-object-form">
                     <div class="form-group">
                         <label>Номер</label>
-                        <input type="text" name="number">
+                        <input type="text" name="number" value="(авто)" disabled style="background: var(--bg-tertiary);">
                     </div>
                     <div class="form-group">
                         <label>Название *</label>
@@ -1718,7 +1723,11 @@ const App = {
                 <form id="add-object-form">
                     <div class="form-group">
                         <label>Номер</label>
-                        <input type="text" name="number">
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 220px; background: var(--bg-tertiary);" value="КАБ-">
+                            <input type="text" name="number_suffix" id="modal-number-suffix" required placeholder="Например: ТУ-01" style="flex: 1;">
+                        </div>
+                        <p class="text-muted">Префикс формируется автоматически по собственнику и ID</p>
                     </div>
                     <div class="form-group">
                         <label>Вид объекта *</label>
@@ -1863,7 +1872,28 @@ const App = {
             if (owners.success && document.getElementById('modal-owner-select')) {
                 document.getElementById('modal-owner-select').innerHTML = 
                     '<option value="">Выберите...</option>' +
-                    owners.data.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+                    owners.data.map(o => `<option value="${o.id}" data-code="${o.code || ''}">${o.name}</option>`).join('');
+            }
+
+            // Обновление префикса номера по выбранному собственнику
+            const ownerSelect = document.getElementById('modal-owner-select');
+            const prefixInput = document.getElementById('modal-number-prefix');
+            if (ownerSelect && prefixInput) {
+                const updatePrefix = () => {
+                    const ownerCode = ownerSelect.selectedOptions?.[0]?.dataset?.code || '';
+                    if (!ownerCode) return;
+                    if (objectType === 'wells') {
+                        prefixInput.value = `ККС-${ownerCode}-`;
+                    } else if (objectType === 'markers') {
+                        // ID формируется на сервере, отображаем плейсхолдер
+                        prefixInput.value = `СТ-${ownerCode}-<id>-`;
+                    } else if (objectType === 'unified_cables') {
+                        // ID формируется на сервере, отображаем плейсхолдер
+                        prefixInput.value = `КАБ-${ownerCode}-<id>-`;
+                    }
+                };
+                ownerSelect.onchange = updatePrefix;
+                updatePrefix();
             }
             
             if (types.success && document.getElementById('modal-type-select')) {
@@ -2013,6 +2043,42 @@ const App = {
         
         // Удаляем служебное поле
         delete data.object_type_code;
+
+        // Санитизация пользовательской части номера (разрешаем буквы/цифры/дефис/подчёркивание)
+        const sanitizeSuffix = (value) => (value || '').toString().replace(/[^0-9A-Za-zА-Яа-яЁё_-]/g, '');
+
+        // Формирование номера по правилам
+        if (type === 'wells') {
+            const prefix = (data.number_prefix || '').toString();
+            const suffix = sanitizeSuffix(data.number_suffix);
+            if (!suffix) {
+                this.notify('Введите номер (часть после префикса)', 'error');
+                return;
+            }
+            data.number = `${prefix}${suffix}`;
+            delete data.number_prefix;
+            delete data.number_suffix;
+        }
+
+        if (type === 'markers') {
+            const suffix = sanitizeSuffix(data.number_suffix);
+            if (!suffix) {
+                this.notify('Введите номер (часть после префикса)', 'error');
+                return;
+            }
+            data.number_suffix = suffix;
+            delete data.number_prefix;
+        }
+
+        if (type === 'unified_cables') {
+            const suffix = sanitizeSuffix(data.number_suffix);
+            if (!suffix) {
+                this.notify('Введите номер (часть после префикса)', 'error');
+                return;
+            }
+            data.number_suffix = suffix;
+            delete data.number_prefix;
+        }
 
         try {
             let response;

@@ -303,6 +303,19 @@ class UnifiedCableController extends BaseController
                 $this->updateDuctCableLength($id);
             }
 
+            // Формируем номер: КАБ-<код_собств>-<id>-<суффикс>
+            $ownerCode = '';
+            if (!empty($data['owner_id'])) {
+                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
+                $ownerCode = $owner['code'] ?? '';
+            }
+            $suffixRaw = (string) $this->request->input('number_suffix', '');
+            $suffix = preg_replace('/[^0-9A-Za-zА-Яа-яЁё_-]/u', '', $suffixRaw);
+            if ($ownerCode && $suffix) {
+                $number = "КАБ-{$ownerCode}-{$id}-{$suffix}";
+                $this->db->update('cables', ['number' => $number], 'id = :id', ['id' => $id]);
+            }
+
             $this->db->commit();
 
             $cable = $this->db->fetch(

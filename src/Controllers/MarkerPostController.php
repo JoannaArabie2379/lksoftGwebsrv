@@ -225,6 +225,19 @@ class MarkerPostController extends BaseController
             $stmt = $this->db->query($sql, $data);
             $id = $stmt->fetchColumn();
 
+            // Формируем номер: СТ-<код_собств>-<id>-<суффикс>
+            $ownerCode = '';
+            if (!empty($data['owner_id'])) {
+                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
+                $ownerCode = $owner['code'] ?? '';
+            }
+            $suffixRaw = (string) $this->request->input('number_suffix', '');
+            $suffix = preg_replace('/[^0-9A-Za-zА-Яа-яЁё_-]/u', '', $suffixRaw);
+            if ($ownerCode && $suffix) {
+                $number = "СТ-{$ownerCode}-{$id}-{$suffix}";
+                $this->db->update('marker_posts', ['number' => $number], 'id = :id', ['id' => $id]);
+            }
+
             $this->db->commit();
 
             $post = $this->db->fetch(
