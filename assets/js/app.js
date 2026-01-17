@@ -8,6 +8,7 @@ const App = {
     currentTab: 'wells',
     currentReference: null,
     pagination: { page: 1, limit: 50, total: 0 },
+    incidentDraftRelatedObjects: [],
 
     /**
      * Инициализация приложения
@@ -62,6 +63,9 @@ const App = {
 
         // Инициализируем карту
         MapManager.init();
+
+        // Подтягиваем цвета типов объектов (слои + отрисовка на карте)
+        this.refreshObjectTypeColors().catch(() => {});
 
         // Применяем начальную видимость слоёв по чекбоксам
         document.querySelectorAll('.layer-item input').forEach(input => this.handleLayerToggle(input));
@@ -163,6 +167,10 @@ const App = {
         // Редактирование/удаление объекта
         document.getElementById('btn-edit-object').addEventListener('click', () => this.editCurrentObject());
         document.getElementById('btn-delete-object').addEventListener('click', () => this.deleteCurrentObject());
+        document.getElementById('btn-copy-coords')?.addEventListener('click', () => this.copyCurrentObjectCoordinates());
+
+        // Отмена подсветки маршрута кабеля
+        document.getElementById('btn-clear-highlight')?.addEventListener('click', () => MapManager.clearHighlight());
 
         // Панель инструментов карты
         document.getElementById('btn-add-direction-map')?.addEventListener('click', () => MapManager.startAddDirectionMode());
@@ -177,6 +185,90 @@ const App = {
             MapManager.cancelAddDuctCableMode();
         });
         document.getElementById('btn-finish-add-mode')?.addEventListener('click', () => MapManager.finishAddCableMode());
+    },
+
+    copyCurrentObjectCoordinates() {
+        const panel = document.getElementById('object-info-panel');
+        if (!panel) return;
+        const objectType = panel.dataset.objectType;
+        if (objectType !== 'well') return;
+
+        const number = document.getElementById('info-title')?.textContent || 'Колодец';
+        const lat = panel.dataset.lat;
+        const lng = panel.dataset.lng;
+        if (!lat || !lng) {
+            this.notify('Координаты недоступны', 'warning');
+            return;
+        }
+
+        const text = `${number}\nWGS84: ${parseFloat(lat).toFixed(6)}, ${parseFloat(lng).toFixed(6)}`;
+        const doNotify = () => this.notify('Координаты скопированы', 'success');
+
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text).then(doNotify).catch(() => {
+                // fallback
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                doNotify();
+            });
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            doNotify();
+        }
+    },
+
+    async refreshObjectTypeColors(redrawMap = true) {
+        const resp = await API.references.all('object_types');
+        if (!resp?.success) return;
+
+        const byCode = {};
+        (resp.data || []).forEach(t => {
+            if (t?.code) byCode[t.code] = t;
+        });
+
+        // Коды системных типов (используются в логике слоёв/карты)
+        const codeToColor = {
+            well: byCode.well?.color,
+            channel: byCode.channel?.color,
+            marker: byCode.marker?.color,
+            cable_ground: byCode.cable_ground?.color,
+            cable_aerial: byCode.cable_aerial?.color,
+            cable_duct: byCode.cable_duct?.color,
+        };
+
+        // Обновляем MapManager.colors
+        if (codeToColor.well) MapManager.colors.wells = codeToColor.well;
+        if (codeToColor.channel) MapManager.colors.channels = codeToColor.channel;
+        if (codeToColor.marker) MapManager.colors.markers = codeToColor.marker;
+        if (codeToColor.cable_ground) MapManager.colors.groundCables = codeToColor.cable_ground;
+        if (codeToColor.cable_aerial) MapManager.colors.aerialCables = codeToColor.cable_aerial;
+        if (codeToColor.cable_duct) MapManager.colors.ductCables = codeToColor.cable_duct;
+
+        // Обновляем цвета иконок слоёв в меню
+        const setLayerIcon = (checkboxId, color) => {
+            const input = document.getElementById(checkboxId);
+            const icon = input?.closest('label')?.querySelector('.layer-icon');
+            if (icon && color) icon.style.background = color;
+        };
+        setLayerIcon('layer-wells', codeToColor.well);
+        setLayerIcon('layer-channels', codeToColor.channel);
+        setLayerIcon('layer-markers', codeToColor.marker);
+        setLayerIcon('layer-ground-cables', codeToColor.cable_ground);
+        setLayerIcon('layer-aerial-cables', codeToColor.cable_aerial);
+        setLayerIcon('layer-duct-cables', codeToColor.cable_duct);
+
+        if (redrawMap && MapManager?.map) {
+            MapManager.loadAllLayers();
+        }
     },
 
     /**
@@ -490,6 +582,26 @@ const App = {
                 if (response.pagination) {
                     this.pagination = response.pagination;
                     this.renderPagination();
+                }
+
+                // Итоги по кабелям (по текущему фильтру/поиску, независимо от страницы)
+                if (this.currentTab === 'unified_cables') {
+                    const statsParams = { ...params };
+                    delete statsParams.page;
+                    delete statsParams.limit;
+                    try {
+                        const statsResp = await API.unifiedCables.stats(statsParams);
+                        if (statsResp?.success) {
+                            const count = statsResp.data?.count ?? 0;
+                            const sum = statsResp.data?.length_sum ?? 0;
+                            const countEl = document.getElementById('cables-count');
+                            const sumEl = document.getElementById('cables-length-sum');
+                            if (countEl) countEl.textContent = String(count);
+                            if (sumEl) sumEl.textContent = Number(sum).toFixed(2);
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
                 }
             } else {
                 console.error('API returned error:', response);
@@ -979,6 +1091,37 @@ const App = {
                 `;
             }
 
+            // Фото для объектов (редактирование)
+            const photosTableMap = {
+                wells: 'wells',
+                directions: 'channel_directions',
+                channels: 'cable_channels',
+                markers: 'marker_posts',
+                unified_cables: 'cables',
+            };
+            const photoTable = photosTableMap[type];
+            if (photoTable && formHtml.includes('</form>')) {
+                formHtml = formHtml.replace(
+                    '</form>',
+                    `
+                        <hr>
+                        <h4>Фото</h4>
+                        <div id="object-photos" data-object-table="${photoTable}" data-object-id="${obj.id}">
+                            <div class="text-muted">Загрузка...</div>
+                        </div>
+                        <div class="form-group" style="margin-top: 10px;">
+                            <label>Добавить фото</label>
+                            <input type="file" id="object-photo-file" accept="image/*">
+                            <input type="text" id="object-photo-description" placeholder="Описание (необязательно)" style="margin-top: 8px;">
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="App.uploadObjectPhoto()" style="margin-top: 8px;">
+                                <i class="fas fa-upload"></i> Загрузить
+                            </button>
+                        </div>
+                    </form>
+                    `
+                );
+            }
+
             const footer = `
                 <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
                 <button class="btn btn-danger" onclick="App.deleteObject('${type}', ${id})" style="margin-right: auto;">
@@ -991,10 +1134,98 @@ const App = {
             
             // Загружаем справочники и устанавливаем значения
             await this.loadModalSelectsWithValues(type);
+
+            // Подгружаем фотографии (если блок есть)
+            if (photoTable) {
+                this.loadObjectPhotos(photoTable, obj.id).catch(() => {});
+            }
             
         } catch (error) {
             console.error('Ошибка загрузки объекта:', error);
             this.notify('Ошибка загрузки данных', 'error');
+        }
+    },
+
+    async loadObjectPhotos(objectTable, objectId) {
+        const container = document.getElementById('object-photos');
+        if (!container) return;
+        container.innerHTML = `<div class="text-muted">Загрузка...</div>`;
+
+        const resp = await API.photos.byObject(objectTable, objectId);
+        if (!resp?.success) {
+            container.innerHTML = `<div class="text-muted">Не удалось загрузить фото</div>`;
+            return;
+        }
+        const photos = resp.data || [];
+        if (!photos.length) {
+            container.innerHTML = `<div class="text-muted">Фотографий нет</div>`;
+            return;
+        }
+
+        container.innerHTML = `
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                ${photos.map(p => `
+                    <div style="width:120px;">
+                        <a href="${p.url}" target="_blank" rel="noopener">
+                            <img src="${p.thumbnail_url || p.url}" alt="" style="width:120px; height:120px; object-fit:cover; border-radius:6px; border:1px solid var(--border-color);">
+                        </a>
+                        <div class="text-muted" style="font-size:12px; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                            ${p.description || ''}
+                        </div>
+                        <button type="button" class="btn btn-sm btn-danger" style="margin-top:6px; width:100%; justify-content:center;" onclick="App.deleteObjectPhoto(${p.id})">
+                            <i class="fas fa-trash"></i> Удалить
+                        </button>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    async uploadObjectPhoto() {
+        const block = document.getElementById('object-photos');
+        const fileInput = document.getElementById('object-photo-file');
+        if (!block || !fileInput) return;
+        const objectTable = block.dataset.objectTable;
+        const objectId = block.dataset.objectId;
+        const file = fileInput.files?.[0];
+        const desc = document.getElementById('object-photo-description')?.value || '';
+        if (!objectTable || !objectId || !file) {
+            this.notify('Выберите файл', 'warning');
+            return;
+        }
+        try {
+            const resp = await API.photos.upload(objectTable, objectId, file, desc);
+            if (resp?.success) {
+                fileInput.value = '';
+                const d = document.getElementById('object-photo-description');
+                if (d) d.value = '';
+                this.notify('Фотография загружена', 'success');
+                await this.loadObjectPhotos(objectTable, objectId);
+            } else {
+                this.notify(resp?.message || 'Ошибка загрузки фото', 'error');
+            }
+        } catch (e) {
+            this.notify('Ошибка загрузки фото', 'error');
+        }
+    },
+
+    async deleteObjectPhoto(photoId) {
+        if (!confirm('Удалить фотографию?')) return;
+        const block = document.getElementById('object-photos');
+        const objectTable = block?.dataset.objectTable;
+        const objectId = block?.dataset.objectId;
+        try {
+            const resp = await API.photos.delete(photoId);
+            if (resp?.success) {
+                this.notify('Фотография удалена', 'success');
+                if (objectTable && objectId) {
+                    await this.loadObjectPhotos(objectTable, objectId);
+                }
+            } else {
+                this.notify(resp?.message || 'Ошибка удаления', 'error');
+            }
+        } catch (e) {
+            this.notify('Ошибка удаления', 'error');
         }
     },
 
@@ -2936,6 +3167,7 @@ const App = {
      * Показ модального окна добавления инцидента
      */
     showAddIncidentModal() {
+        this.incidentDraftRelatedObjects = [];
         const content = `
             <form id="incident-form">
                 <div class="form-group">
@@ -2960,6 +3192,14 @@ const App = {
                     </select>
                 </div>
                 <div class="form-group">
+                    <label>Статус</label>
+                    <select name="status">
+                        <option value="open" selected>Открыт</option>
+                        <option value="in_progress">В работе</option>
+                        <option value="resolved">Решён</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label>Описание</label>
                     <textarea name="description" rows="4"></textarea>
                 </div>
@@ -2967,6 +3207,12 @@ const App = {
                     <label>Виновник</label>
                     <input type="text" name="culprit">
                 </div>
+                <hr>
+                <h4>Связанные объекты</h4>
+                <div id="incident-related-objects" class="text-muted">Нет объектов</div>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="MapManager.startIncidentSelectMode()" style="margin-top: 8px;">
+                    <i class="fas fa-crosshairs"></i> Указать объект на карте
+                </button>
             </form>
         `;
 
@@ -2976,6 +3222,7 @@ const App = {
         `;
 
         this.showModal('Создать инцидент', content, footer);
+        this.renderIncidentRelatedObjects();
     },
 
     /**
@@ -2985,6 +3232,7 @@ const App = {
         const form = document.getElementById('incident-form');
         const formData = new FormData(form);
         const data = Object.fromEntries(formData.entries());
+        data.related_objects = this.incidentDraftRelatedObjects;
 
         try {
             const response = await API.incidents.create(data);
@@ -2998,6 +3246,73 @@ const App = {
         } catch (error) {
             this.notify(error.message || 'Ошибка', 'error');
         }
+    },
+
+    getIncidentObjectTypeName(type) {
+        const names = {
+            well: 'Колодец',
+            channel_direction: 'Направление',
+            cable_channel: 'Канал',
+            unified_cable: 'Кабель',
+            ground_cable: 'Кабель в грунте',
+            aerial_cable: 'Воздушный кабель',
+            duct_cable: 'Кабель в канализации',
+            marker_post: 'Столбик',
+        };
+        return names[type] || type;
+    },
+
+    addIncidentRelatedObjectFromMap(hit) {
+        // Возвращаем курсор
+        try {
+            const c = MapManager.map?.getContainer?.();
+            if (c) c.style.cursor = '';
+        } catch (e) {}
+
+        const t = hit?.objectType;
+        const p = hit?.properties || {};
+        if (!t || !p?.id) return;
+
+        // map objectType -> incident type
+        let type = t;
+        if (t === 'unified_cable') type = 'unified_cable';
+        if (t === 'well') type = 'well';
+        if (t === 'channel_direction') type = 'channel_direction';
+        if (t === 'marker_post') type = 'marker_post';
+
+        const exists = this.incidentDraftRelatedObjects.some(o => o.type === type && String(o.id) === String(p.id));
+        if (!exists) {
+            this.incidentDraftRelatedObjects.push({ type, id: parseInt(p.id), number: p.number || null });
+            this.notify(`Добавлен объект: ${this.getIncidentObjectTypeName(type)} ${p.number || p.id}`, 'success');
+        }
+        this.renderIncidentRelatedObjects();
+    },
+
+    renderIncidentRelatedObjects() {
+        const container = document.getElementById('incident-related-objects');
+        if (!container) return;
+        const list = this.incidentDraftRelatedObjects || [];
+        if (!list.length) {
+            container.innerHTML = '<div class="text-muted">Нет объектов</div>';
+            return;
+        }
+        container.innerHTML = `
+            <div style="display:grid; gap:6px;">
+                ${list.map((o, idx) => `
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">
+                        <span>${this.getIncidentObjectTypeName(o.type)}: ${o.number || ('#' + o.id)}</span>
+                        <button type="button" class="btn btn-sm btn-danger" onclick="App.removeIncidentRelatedObject(${idx})">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    removeIncidentRelatedObject(idx) {
+        this.incidentDraftRelatedObjects.splice(idx, 1);
+        this.renderIncidentRelatedObjects();
     },
 
     /**
@@ -3083,7 +3398,7 @@ const App = {
             'object_types': `
                 <div class="form-group">
                     <label>Код *</label>
-                    <input type="text" name="code" value="${data.code || ''}" required>
+                    <input type="text" name="code" value="${data.code || ''}" required ${data.id ? 'readonly' : ''}>
                 </div>
                 <div class="form-group">
                     <label>Название *</label>
@@ -3356,13 +3671,21 @@ const App = {
 
             const footer = `
                 <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
-                <button class="btn btn-danger" onclick="App.deleteReference(${id})" style="margin-right: auto;">
+                <button class="btn btn-danger" id="btn-delete-ref" onclick="App.deleteReference(${id})" style="margin-right: auto;">
                     <i class="fas fa-trash"></i> Удалить
                 </button>
                 <button class="btn btn-primary" onclick="App.submitReferenceUpdate(${id})">Сохранить</button>
             `;
 
             this.showModal('Редактировать запись', content, footer);
+
+            // Системные виды объектов не удаляем (скрываем кнопку)
+            if (this.currentReference === 'object_types') {
+                const systemCodes = new Set(['well', 'channel', 'marker', 'cable_ground', 'cable_aerial', 'cable_duct']);
+                if (systemCodes.has(data?.code)) {
+                    document.getElementById('btn-delete-ref')?.classList.add('hidden');
+                }
+            }
             
             // Загружаем связанные справочники
             await this.loadReferenceFormSelects();
@@ -3476,6 +3799,9 @@ const App = {
                 this.hideModal();
                 this.notify('Запись обновлена', 'success');
                 this.showReference(this.currentReference);
+                if (this.currentReference === 'object_types') {
+                    this.refreshObjectTypeColors(true).catch(() => {});
+                }
             } else {
                 this.notify(response.message || 'Ошибка', 'error');
             }
@@ -3507,6 +3833,228 @@ const App = {
     /**
      * Показ инцидента в модальном окне
      */
+    async editIncident(id) {
+        try {
+            const resp = await API.incidents.get(id);
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка загрузки инцидента', 'error');
+                return;
+            }
+            this.showEditIncidentModal(resp.data);
+        } catch (e) {
+            this.notify('Ошибка загрузки инцидента', 'error');
+        }
+    },
+
+    showEditIncidentModal(incident) {
+        this.incidentDraftRelatedObjects = (incident.related_objects || []).map(o => ({
+            type: o.object_type,
+            id: parseInt(o.id),
+            number: o.number || null,
+        }));
+
+        const content = `
+            <form id="incident-edit-form">
+                <div class="form-group">
+                    <label>Номер *</label>
+                    <input type="text" name="number" value="${incident.number || ''}" required>
+                </div>
+                <div class="form-group">
+                    <label>Заголовок *</label>
+                    <input type="text" name="title" value="${incident.title || ''}" required>
+                </div>
+                <div class="form-group">
+                    <label>Дата инцидента *</label>
+                    <input type="datetime-local" name="incident_date" value="${(incident.incident_date || '').slice(0, 16)}" required>
+                </div>
+                <div class="form-group">
+                    <label>Статус</label>
+                    <select name="status">
+                        <option value="open" ${incident.status === 'open' ? 'selected' : ''}>Открыт</option>
+                        <option value="in_progress" ${incident.status === 'in_progress' ? 'selected' : ''}>В работе</option>
+                        <option value="resolved" ${incident.status === 'resolved' ? 'selected' : ''}>Решён</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Приоритет</label>
+                    <select name="priority">
+                        <option value="low" ${incident.priority === 'low' ? 'selected' : ''}>Низкий</option>
+                        <option value="normal" ${incident.priority === 'normal' ? 'selected' : ''}>Обычный</option>
+                        <option value="high" ${incident.priority === 'high' ? 'selected' : ''}>Высокий</option>
+                        <option value="critical" ${incident.priority === 'critical' ? 'selected' : ''}>Критический</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Описание</label>
+                    <textarea name="description" rows="4">${incident.description || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Виновник</label>
+                    <input type="text" name="culprit" value="${incident.culprit || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Решение</label>
+                    <textarea name="resolution" rows="3">${incident.resolution || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Примечания</label>
+                    <textarea name="notes" rows="2">${incident.notes || ''}</textarea>
+                </div>
+                <hr>
+                <h4>Связанные объекты</h4>
+                <div id="incident-related-objects" class="text-muted">Нет объектов</div>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="MapManager.startIncidentSelectMode()" style="margin-top: 8px;">
+                    <i class="fas fa-crosshairs"></i> Добавить объект с карты
+                </button>
+                <hr>
+                <h4>Фото</h4>
+                <div id="object-photos" data-object-table="incidents" data-object-id="${incident.id}">
+                    <div class="text-muted">Загрузка...</div>
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Добавить фото</label>
+                    <input type="file" id="object-photo-file" accept="image/*">
+                    <input type="text" id="object-photo-description" placeholder="Описание (необязательно)" style="margin-top: 8px;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="App.uploadObjectPhoto()" style="margin-top: 8px;">
+                        <i class="fas fa-upload"></i> Загрузить
+                    </button>
+                </div>
+                <hr>
+                <h4>Документы</h4>
+                <div id="incident-documents" data-incident-id="${incident.id}">
+                    <div class="text-muted">Загрузка...</div>
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Добавить документ</label>
+                    <input type="file" id="incident-doc-file">
+                    <input type="text" id="incident-doc-description" placeholder="Описание (необязательно)" style="margin-top: 8px;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="App.uploadIncidentDocument(${incident.id})" style="margin-top: 8px;">
+                        <i class="fas fa-upload"></i> Загрузить
+                    </button>
+                </div>
+            </form>
+        `;
+
+        const footer = `
+            <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+            <button class="btn btn-danger" onclick="App.deleteIncident(${incident.id})" style="margin-left:auto;">
+                <i class="fas fa-trash"></i> Удалить
+            </button>
+            <button class="btn btn-primary" onclick="App.submitIncidentUpdate(${incident.id})">
+                <i class="fas fa-save"></i> Сохранить
+            </button>
+        `;
+
+        this.showModal(`Редактировать инцидент: ${incident.number}`, content, footer);
+        this.renderIncidentRelatedObjects();
+        this.loadObjectPhotos('incidents', incident.id).catch(() => {});
+        this.loadIncidentDocuments(incident.id).catch(() => {});
+    },
+
+    async submitIncidentUpdate(id) {
+        const form = document.getElementById('incident-edit-form');
+        if (!form) return;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+        data.related_objects = this.incidentDraftRelatedObjects;
+
+        try {
+            const resp = await API.incidents.update(id, data);
+            if (resp?.success) {
+                this.hideModal();
+                this.notify('Инцидент обновлён', 'success');
+                this.loadIncidents();
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify('Ошибка', 'error');
+        }
+    },
+
+    async deleteIncident(id) {
+        if (!confirm('Удалить инцидент?')) return;
+        try {
+            const resp = await API.incidents.delete(id);
+            if (resp?.success) {
+                this.hideModal();
+                this.notify('Инцидент удалён', 'success');
+                this.loadIncidents();
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify('Ошибка', 'error');
+        }
+    },
+
+    async loadIncidentDocuments(incidentId) {
+        const container = document.getElementById('incident-documents');
+        if (!container) return;
+        container.innerHTML = `<div class="text-muted">Загрузка...</div>`;
+        const resp = await API.incidents.documents(incidentId);
+        if (!resp?.success) {
+            container.innerHTML = `<div class="text-muted">Не удалось загрузить документы</div>`;
+            return;
+        }
+        const docs = resp.data || [];
+        if (!docs.length) {
+            container.innerHTML = `<div class="text-muted">Документов нет</div>`;
+            return;
+        }
+        container.innerHTML = `
+            <div style="display:grid; gap:8px;">
+                ${docs.map(d => `
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">
+                        <a href="${d.url}" target="_blank" rel="noopener">${d.original_filename || d.filename}</a>
+                        <button type="button" class="btn btn-sm btn-danger" onclick="App.deleteIncidentDocument(${d.id}, ${incidentId})">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    async uploadIncidentDocument(incidentId) {
+        const fileInput = document.getElementById('incident-doc-file');
+        const desc = document.getElementById('incident-doc-description')?.value || '';
+        const file = fileInput?.files?.[0];
+        if (!file) {
+            this.notify('Выберите файл', 'warning');
+            return;
+        }
+        try {
+            const resp = await API.incidents.uploadDocument(incidentId, file, desc);
+            if (resp?.success) {
+                fileInput.value = '';
+                const d = document.getElementById('incident-doc-description');
+                if (d) d.value = '';
+                this.notify('Документ загружен', 'success');
+                await this.loadIncidentDocuments(incidentId);
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify('Ошибка', 'error');
+        }
+    },
+
+    async deleteIncidentDocument(docId, incidentId) {
+        if (!confirm('Удалить документ?')) return;
+        try {
+            const resp = await API.incidents.deleteDocument(docId);
+            if (resp?.success) {
+                this.notify('Документ удалён', 'success');
+                await this.loadIncidentDocuments(incidentId);
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify('Ошибка', 'error');
+        }
+    },
+
     showIncidentModal(incident) {
         const content = `
             <div style="display: grid; gap: 12px;">
@@ -3520,7 +4068,7 @@ const App = {
                 ${incident.related_objects?.length ? `
                     <div><strong>Связанные объекты:</strong>
                         <ul>
-                            ${incident.related_objects.map(o => `<li>${o.object_type}: ${o.number}</li>`).join('')}
+                            ${incident.related_objects.map(o => `<li>${this.getIncidentObjectTypeName(o.object_type)}: ${o.number}</li>`).join('')}
                         </ul>
                     </div>
                 ` : ''}
@@ -3536,6 +4084,12 @@ const App = {
 
         const footer = `
             <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+            <button class="btn btn-danger" onclick="App.deleteIncident(${incident.id})" style="margin-left:auto;">
+                <i class="fas fa-trash"></i> Удалить
+            </button>
+            <button class="btn btn-primary" onclick="App.editIncident(${incident.id})">
+                <i class="fas fa-edit"></i> Редактировать
+            </button>
         `;
 
         this.showModal(`Инцидент: ${incident.number}`, content, footer);

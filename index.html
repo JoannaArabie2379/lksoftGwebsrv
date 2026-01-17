@@ -114,12 +114,12 @@
                     <div class="layers-list">
                         <label class="layer-item">
                             <input type="checkbox" id="layer-wells" checked>
-                            <span class="layer-icon" style="background: #3498db;"></span>
+                            <span class="layer-icon" style="background: #fa00fa;"></span>
                             <span>Колодцы</span>
                         </label>
                         <label class="layer-item">
                             <input type="checkbox" id="layer-channels" checked>
-                            <span class="layer-icon" style="background: #9b59b6;"></span>
+                            <span class="layer-icon" style="background: #fa00fa;"></span>
                             <span>Направления каналов</span>
                         </label>
                         <label class="layer-item">
@@ -129,17 +129,17 @@
                         </label>
                         <label class="layer-item">
                             <input type="checkbox" id="layer-ground-cables">
-                            <span class="layer-icon" style="background: #27ae60;"></span>
+                            <span class="layer-icon" style="background: #551b1b;"></span>
                             <span>Кабели в грунте</span>
                         </label>
                         <label class="layer-item">
                             <input type="checkbox" id="layer-aerial-cables">
-                            <span class="layer-icon" style="background: #f39c12;"></span>
+                            <span class="layer-icon" style="background: #009dff;"></span>
                             <span>Воздушные кабели</span>
                         </label>
                         <label class="layer-item">
                             <input type="checkbox" id="layer-duct-cables">
-                            <span class="layer-icon" style="background: #1abc9c;"></span>
+                            <span class="layer-icon" style="background: #00bd26;"></span>
                             <span>Кабели в канализации</span>
                         </label>
                     </div>
@@ -201,6 +201,13 @@
                             <i class="fas fa-route"></i>
                         </button>
                     </div>
+
+                    <!-- Панель подсветки кабеля -->
+                    <div id="highlight-bar" class="highlight-bar hidden">
+                        <button class="btn btn-sm btn-secondary" id="btn-clear-highlight" title="Отменить подсветку">
+                            <i class="fas fa-times"></i> Отменить подсветку
+                        </button>
+                    </div>
                     
                     <!-- Статус режима добавления -->
                     <div id="add-mode-status" class="add-mode-status hidden">
@@ -225,6 +232,9 @@
                         <div class="info-panel-actions">
                             <button class="btn btn-primary btn-sm" id="btn-edit-object">
                                 <i class="fas fa-edit"></i> Редактировать
+                            </button>
+                            <button class="btn btn-secondary btn-sm hidden" id="btn-copy-coords" title="Скопировать координаты">
+                                <i class="fas fa-copy"></i> Копировать координаты
                             </button>
                             <button class="btn btn-danger btn-sm" id="btn-delete-object">
                                 <i class="fas fa-trash"></i> Удалить
@@ -273,6 +283,10 @@
                         <select id="cables-filter-owner">
                             <option value="">Собственник: все</option>
                         </select>
+                        <div class="cables-totals">
+                            <span>Количество: <strong id="cables-count">0</strong></span>
+                            <span>Всего Длина расч. (м): <strong id="cables-length-sum">0</strong></span>
+                        </div>
                     </div>
                     
                     <div class="search-bar">

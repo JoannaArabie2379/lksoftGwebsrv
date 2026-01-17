@@ -10,6 +10,11 @@ use App\Core\Auth;
 
 class ReferenceController extends BaseController
 {
+    private function systemObjectTypeCodes(): array
+    {
+        return ['well', 'channel', 'marker', 'cable_ground', 'cable_aerial', 'cable_duct'];
+    }
+
     // Конфигурация справочников
     private array $references = [
         'object_types' => [
@@ -229,6 +234,11 @@ class ReferenceController extends BaseController
         }
 
         $data = $this->request->only($config['fields']);
+
+        // Для видов объектов запрещаем изменение code (чтобы не ломать логику слоёв/карты)
+        if ($type === 'object_types' && array_key_exists('code', $data)) {
+            unset($data['code']);
+        }
         
         // Преобразование булевых значений
         if (array_key_exists('is_default', $data)) {
@@ -283,6 +293,10 @@ class ReferenceController extends BaseController
         // Проверка на системные записи
         if (isset($item['is_system']) && $item['is_system']) {
             Response::error('Нельзя удалить системную запись', 400);
+        }
+        // Системные виды объектов (well/channel/marker/cable_*) не удаляем, но редактирование разрешено
+        if ($type === 'object_types' && isset($item['code']) && in_array($item['code'], $this->systemObjectTypeCodes(), true)) {
+            Response::error('Нельзя удалить системный вид объекта', 400);
         }
 
         try {

@@ -33,7 +33,14 @@ class UnifiedCableController extends BaseController
         $where = $filters['where'];
         $params = $filters['params'];
 
-        $total = $this->getTotal('cables', $where, $params, 'c');
+        // total с JOIN'ами, чтобы работал поиск по cc.marking
+        $totalSql = "SELECT COUNT(*) as cnt
+                     FROM cables c
+                     LEFT JOIN cable_catalog cc ON c.cable_catalog_id = cc.id";
+        if ($where) {
+            $totalSql .= " WHERE {$where}";
+        }
+        $total = (int) ($this->db->fetch($totalSql, $params)['cnt'] ?? 0);
 
         $sql = "SELECT c.id, c.number, 
                        c.cable_catalog_id, cc.marking as cable_marking, cc.fiber_count,
@@ -62,6 +69,39 @@ class UnifiedCableController extends BaseController
         $data = $this->db->fetchAll($sql, $params);
 
         Response::paginated($data, $total, $pagination['page'], $pagination['limit']);
+    }
+
+    /**
+     * GET /api/unified-cables/stats
+     * Агрегации по текущему фильтру (кол-во и сумма длины)
+     */
+    public function stats(): void
+    {
+        $filters = $this->buildFilters([
+            'owner_id' => 'c.owner_id',
+            'object_type_id' => 'c.object_type_id',
+            'cable_type_id' => 'c.cable_type_id',
+            'status_id' => 'c.status_id',
+            '_search' => ['c.number', 'c.notes', 'cc.marking'],
+        ]);
+
+        $where = $filters['where'];
+        $params = $filters['params'];
+
+        $sql = "SELECT COUNT(*) as cnt,
+                       COALESCE(SUM(c.length_calculated), 0) as length_sum
+                FROM cables c
+                LEFT JOIN cable_catalog cc ON c.cable_catalog_id = cc.id";
+        if ($where) {
+            $sql .= " WHERE {$where}";
+        }
+
+        $row = $this->db->fetch($sql, $params) ?: ['cnt' => 0, 'length_sum' => 0];
+
+        Response::success([
+            'count' => (int) ($row['cnt'] ?? 0),
+            'length_sum' => (float) ($row['length_sum'] ?? 0),
+        ]);
     }
 
     /**

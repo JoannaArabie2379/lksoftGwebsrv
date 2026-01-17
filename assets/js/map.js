@@ -26,15 +26,16 @@ const MapManager = {
     highlightLayer: null,
     lastClickHits: [],
     hoverHits: [],
+    incidentSelectMode: false,
 
     // Цвета для слоёв
     colors: {
-        wells: '#3498db',
-        channels: '#9b59b6',
+        wells: '#fa00fa',
+        channels: '#fa00fa',
         markers: '#e67e22',
-        groundCables: '#27ae60',
-        aerialCables: '#f39c12',
-        ductCables: '#1abc9c',
+        groundCables: '#551b1b',
+        aerialCables: '#009dff',
+        ductCables: '#00bd26',
     },
 
     // Цвета статусов
@@ -45,6 +46,25 @@ const MapManager = {
         repair: '#f59e0b',
         planned: '#3b82f6',
         decommissioned: '#6b7280',
+    },
+
+    getTypeDisplayName(objectType) {
+        const typeNames = {
+            well: 'Колодец',
+            channel_direction: 'Направление',
+            marker_post: 'Столбик',
+            ground_cable: 'Кабель в грунте',
+            aerial_cable: 'Воздушный кабель',
+            duct_cable: 'Кабель в канализации',
+            unified_cable: 'Кабель',
+        };
+        return typeNames[objectType] || 'Объект';
+    },
+
+    setHighlightBarVisible(visible) {
+        const el = document.getElementById('highlight-bar');
+        if (!el) return;
+        el.classList.toggle('hidden', !visible);
     },
 
     /**
@@ -84,6 +104,12 @@ const MapManager = {
         this.map.on('click', (e) => this.onMapClick(e));
 
         console.log('Карта инициализирована');
+    },
+
+    startIncidentSelectMode() {
+        this.incidentSelectMode = true;
+        if (this.map) this.map.getContainer().style.cursor = 'crosshair';
+        App.notify('Кликните на объекте на карте для привязки к инциденту', 'info');
     },
 
     /**
@@ -158,7 +184,15 @@ const MapManager = {
                         });
                     },
                     onEachFeature: (feature, layer) => {
-                        layer._igsMeta = { objectType: 'well', properties: feature.properties };
+                        const coords = layer.getLatLng();
+                        layer._igsMeta = {
+                            objectType: 'well',
+                            properties: {
+                                ...feature.properties,
+                                _lat: coords?.lat,
+                                _lng: coords?.lng,
+                            }
+                        };
                         layer.on('click', (e) => {
                             // Проверяем режим добавления направления
                             if (this.addDirectionMode) {
@@ -175,6 +209,20 @@ const MapManager = {
                             L.DomEvent.stopPropagation(e);
                             this.handleObjectsClick(e.latlng || layer.getLatLng());
                         });
+
+                        // Подпись номера над колодцем
+                        if (feature?.properties?.number) {
+                            const labelColor = feature.properties.status_color || this.colors.wells;
+                            const label = L.marker(layer.getLatLng(), {
+                                interactive: false,
+                                keyboard: false,
+                                icon: L.divIcon({
+                                    className: 'well-number-label',
+                                    html: `<span style="color:${labelColor}">${feature.properties.number}</span>`,
+                                }),
+                            });
+                            label.addTo(this.layers.wells);
+                        }
                         
                         // Popup при наведении
                         layer.bindTooltip(`
@@ -217,7 +265,7 @@ const MapManager = {
             if (validFeatures.length > 0) {
                 L.geoJSON({ type: 'FeatureCollection', features: validFeatures }, {
                     style: (feature) => ({
-                        color: feature.properties.type_color || this.colors.channels,
+                        color: this.colors.channels,
                         weight: 3,
                         opacity: 0.8,
                     }),
@@ -370,6 +418,33 @@ const MapManager = {
     handleObjectsClick(latlng) {
         const hits = this.getObjectsAtLatLng(latlng);
         this.lastClickHits = hits;
+
+        // Выбор объекта для инцидента
+        if (this.incidentSelectMode) {
+            if (hits.length <= 1) {
+                const h = hits[0];
+                if (h) {
+                    this.incidentSelectMode = false;
+                    App.addIncidentRelatedObjectFromMap(h);
+                }
+                return;
+            }
+
+            const content = `
+                <div style="max-height: 60vh; overflow:auto;">
+                    ${(hits || []).map((h, idx) => `
+                        <button class="btn btn-secondary btn-block" style="margin-bottom:8px;" onclick="MapManager.selectIncidentObjectFromHits(${idx})">
+                            ${h.title}
+                        </button>
+                    `).join('')}
+                </div>
+                <p class="text-muted" style="margin-top:8px;">Выберите объект для привязки к инциденту.</p>
+            `;
+            const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
+            App.showModal('Выберите объект', content, footer);
+            return;
+        }
+
         if (hits.length <= 1) {
             const h = hits[0];
             if (h) this.showObjectInfo(h.objectType, h.properties);
@@ -395,6 +470,14 @@ const MapManager = {
         if (!h) return;
         App.hideModal();
         this.showObjectInfo(h.objectType, h.properties);
+    },
+
+    selectIncidentObjectFromHits(idx) {
+        const h = (this.lastClickHits || [])[idx];
+        if (!h) return;
+        this.incidentSelectMode = false;
+        App.hideModal();
+        App.addIncidentRelatedObjectFromMap(h);
     },
 
     getObjectsAtLatLng(latlng) {
@@ -428,7 +511,7 @@ const MapManager = {
                     hits.push({
                         objectType: meta.objectType,
                         properties: props,
-                        title: `${meta.objectType}: ${props.number || props.id}`
+                        title: `${this.getTypeDisplayName(meta.objectType)}: ${props.number || props.id}`
                     });
                 }
                 return;
@@ -447,7 +530,7 @@ const MapManager = {
                     hits.push({
                         objectType: meta.objectType,
                         properties: props,
-                        title: `${meta.objectType}: ${props.number || props.id}`
+                        title: `${this.getTypeDisplayName(meta.objectType)}: ${props.number || props.id}`
                     });
                 }
             }
@@ -524,18 +607,7 @@ const MapManager = {
         const infoTitle = document.getElementById('info-title');
         const infoContent = document.getElementById('info-content');
         
-        // Определяем название типа объекта
-        const typeNames = {
-            well: 'Колодец',
-            channel_direction: 'Направление канала',
-            marker_post: 'Указательный столбик',
-            ground_cable: 'Кабель в грунте',
-            aerial_cable: 'Воздушный кабель',
-            duct_cable: 'Кабель в канализации',
-            unified_cable: 'Кабель',
-        };
-
-        infoTitle.textContent = `${typeNames[objectType] || 'Объект'}: ${properties.number || properties.id}`;
+        infoTitle.textContent = `${this.getTypeDisplayName(objectType)}: ${properties.number || properties.id}`;
         
         // Формируем содержимое
         let html = '';
@@ -590,6 +662,15 @@ const MapManager = {
         // Сохраняем данные для редактирования
         infoPanel.dataset.objectType = objectType;
         infoPanel.dataset.objectId = properties.id;
+        infoPanel.dataset.lat = properties?._lat ?? '';
+        infoPanel.dataset.lng = properties?._lng ?? '';
+
+        // Кнопка "Скопировать координаты" доступна только для колодца
+        const copyBtn = document.getElementById('btn-copy-coords');
+        if (copyBtn) {
+            const canCopy = objectType === 'well' && properties?._lat !== undefined && properties?._lng !== undefined;
+            copyBtn.classList.toggle('hidden', !canCopy);
+        }
         
         infoPanel.classList.remove('hidden');
     },
@@ -599,6 +680,7 @@ const MapManager = {
             this.map.removeLayer(this.highlightLayer);
             this.highlightLayer = null;
         }
+        this.setHighlightBarVisible(false);
     },
 
     async highlightCableRouteDirections(cableId) {
@@ -609,6 +691,7 @@ const MapManager = {
                 this.highlightLayer = L.geoJSON(resp, {
                     style: () => ({ color: '#ef4444', weight: 4, opacity: 0.9 })
                 }).addTo(this.map);
+                this.setHighlightBarVisible(true);
                 const bounds = this.highlightLayer.getBounds();
                 if (bounds && bounds.isValid()) {
                     this.fitToBounds(bounds, 17);

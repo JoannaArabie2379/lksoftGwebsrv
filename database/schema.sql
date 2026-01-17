@@ -467,6 +467,34 @@ CREATE TABLE IF NOT EXISTS incident_marker_posts (
     PRIMARY KEY (incident_id, marker_post_id)
 );
 
+-- Связь инцидентов с унифицированными кабелями (таблица cables)
+CREATE TABLE IF NOT EXISTS incident_cables (
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    cable_id INTEGER NOT NULL REFERENCES cables(id) ON DELETE CASCADE,
+    PRIMARY KEY (incident_id, cable_id)
+);
+
+-- Связь инцидентов с каналами (cable_channels)
+CREATE TABLE IF NOT EXISTS incident_cable_channels (
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    cable_channel_id INTEGER NOT NULL REFERENCES cable_channels(id) ON DELETE CASCADE,
+    PRIMARY KEY (incident_id, cable_channel_id)
+);
+
+-- Документы инцидентов
+CREATE TABLE IF NOT EXISTS incident_documents (
+    id SERIAL PRIMARY KEY,
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    filename VARCHAR(255) NOT NULL,
+    original_filename VARCHAR(255),
+    file_path TEXT NOT NULL,
+    file_size INTEGER,
+    mime_type VARCHAR(100),
+    description TEXT,
+    uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- ============================================================
 -- РАЗДЕЛ 4: ГРУППЫ ОБЪЕКТОВ
 -- ============================================================

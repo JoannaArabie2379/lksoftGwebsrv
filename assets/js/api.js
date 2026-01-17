@@ -337,6 +337,10 @@ const API = {
             return API.get('/unified-cables', params);
         },
 
+        stats(params = {}) {
+            return API.get('/unified-cables/stats', params);
+        },
+
         geojson(params = {}) {
             return API.get('/unified-cables/geojson', params);
         },
@@ -439,6 +443,21 @@ const API = {
 
         addHistory(id, data) {
             return API.post(`/incidents/${id}/history`, data);
+        },
+
+        documents(id) {
+            return API.get(`/incidents/${id}/documents`);
+        },
+
+        uploadDocument(id, file, description = '') {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('description', description);
+            return API.upload(`/incidents/${id}/documents`, formData);
+        },
+
+        deleteDocument(docId) {
+            return API.delete(`/incidents/documents/${docId}`);
         },
     },
 

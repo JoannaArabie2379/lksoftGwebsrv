@@ -12,7 +12,7 @@ class PhotoController extends BaseController
 {
     private array $allowedTables = [
         'wells', 'channel_directions', 'cable_channels', 'marker_posts',
-        'ground_cables', 'aerial_cables', 'duct_cables', 'incidents', 'incident_history'
+        'ground_cables', 'aerial_cables', 'duct_cables', 'cables', 'incidents', 'incident_history'
     ];
 
     /**
