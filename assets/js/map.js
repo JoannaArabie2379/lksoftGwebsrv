@@ -24,6 +24,7 @@ const MapManager = {
 
     // Подсветка маршрута (направления) выбранного кабеля
     highlightLayer: null,
+    lastClickHits: [],
 
     // Цвета для слоёв
     colors: {
@@ -166,7 +167,9 @@ const MapManager = {
                                 });
                                 return;
                             }
-                            this.showObjectInfo('well', feature.properties);
+                            L.DomEvent.stopPropagation(e);
+                            layer._igsMeta = { objectType: 'well', properties: feature.properties };
+                            this.handleObjectsClick(e.latlng);
                         });
                         
                         // Popup при наведении
@@ -221,7 +224,9 @@ const MapManager = {
                                 await this.handleDirectionClickForDuctCable(feature.properties?.id);
                                 return;
                             }
-                            this.showObjectInfo('channel_direction', feature.properties);
+                            L.DomEvent.stopPropagation(e);
+                            layer._igsMeta = { objectType: 'channel_direction', properties: feature.properties };
+                            this.handleObjectsClick(e.latlng);
                         });
                         
                         layer.bindTooltip(`
@@ -275,7 +280,11 @@ const MapManager = {
                         });
                     },
                     onEachFeature: (feature, layer) => {
-                        layer.on('click', () => this.showObjectInfo('marker_post', feature.properties));
+                        layer.on('click', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            layer._igsMeta = { objectType: 'marker_post', properties: feature.properties };
+                            this.handleObjectsClick(e.latlng);
+                        });
                         
                         layer.bindTooltip(`
                             <strong>Столбик: ${feature.properties.number || '-'}</strong><br>
@@ -329,7 +338,11 @@ const MapManager = {
                         dashArray: type === 'aerial' ? '5, 5' : null,
                     }),
                     onEachFeature: (feature, layer) => {
-                        layer.on('click', () => this.showObjectInfo('unified_cable', feature.properties));
+                        layer.on('click', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            layer._igsMeta = { objectType: 'unified_cable', properties: feature.properties };
+                            this.handleObjectsClick(e.latlng);
+                        });
                         
                         const typeName = {
                             ground: 'в грунте',
@@ -348,6 +361,106 @@ const MapManager = {
         } catch (error) {
             console.error(`Ошибка загрузки кабелей ${type}:`, error);
         }
+    },
+
+    handleObjectsClick(latlng) {
+        const hits = this.getObjectsAtLatLng(latlng);
+        this.lastClickHits = hits;
+        if (hits.length <= 1) {
+            const h = hits[0];
+            if (h) this.showObjectInfo(h.objectType, h.properties);
+            return;
+        }
+
+        const content = `
+            <div style="max-height: 60vh; overflow:auto;">
+                ${(hits || []).map((h, idx) => `
+                    <button class="btn btn-secondary btn-block" style="margin-bottom:8px;" onclick="MapManager.selectObjectFromHits(${idx})">
+                        ${h.title}
+                    </button>
+                `).join('')}
+            </div>
+            <p class="text-muted" style="margin-top:8px;">Выберите объект для просмотра информации.</p>
+        `;
+        const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
+        App.showModal('Выберите объект', content, footer);
+    },
+
+    selectObjectFromHits(idx) {
+        const h = (this.lastClickHits || [])[idx];
+        if (!h) return;
+        App.hideModal();
+        this.showObjectInfo(h.objectType, h.properties);
+    },
+
+    getObjectsAtLatLng(latlng) {
+        if (!this.map) return [];
+        const clickPt = this.map.latLngToLayerPoint(latlng);
+        const hits = [];
+
+        const distToSeg = (p, a, b) => {
+            const vx = b.x - a.x, vy = b.y - a.y;
+            const wx = p.x - a.x, wy = p.y - a.y;
+            const c1 = vx * wx + vy * wy;
+            if (c1 <= 0) return Math.hypot(p.x - a.x, p.y - a.y);
+            const c2 = vx * vx + vy * vy;
+            if (c2 <= c1) return Math.hypot(p.x - b.x, p.y - b.y);
+            const t = c1 / c2;
+            const px = a.x + t * vx, py = a.y + t * vy;
+            return Math.hypot(p.x - px, p.y - py);
+        };
+
+        const testLayer = (layer) => {
+            const meta = layer?._igsMeta;
+            if (!meta || !meta.properties) return;
+            const props = meta.properties;
+
+            // Point-like
+            if (typeof layer.getLatLng === 'function') {
+                const pt = this.map.latLngToLayerPoint(layer.getLatLng());
+                const d = Math.hypot(clickPt.x - pt.x, clickPt.y - pt.y);
+                const thr = 12;
+                if (d <= thr) {
+                    hits.push({
+                        objectType: meta.objectType,
+                        properties: props,
+                        title: `${meta.objectType}: ${props.number || props.id}`
+                    });
+                }
+                return;
+            }
+
+            // Polyline-like
+            if (typeof layer.getLatLngs === 'function') {
+                const latlngs = layer.getLatLngs().flat(Infinity).filter(ll => ll && ll.lat !== undefined);
+                if (latlngs.length < 2) return;
+                const pts = latlngs.map(ll => this.map.latLngToLayerPoint(ll));
+                let minD = Infinity;
+                for (let i = 0; i < pts.length - 1; i++) {
+                    minD = Math.min(minD, distToSeg(clickPt, pts[i], pts[i + 1]));
+                }
+                if (minD <= 8) {
+                    hits.push({
+                        objectType: meta.objectType,
+                        properties: props,
+                        title: `${meta.objectType}: ${props.number || props.id}`
+                    });
+                }
+            }
+        };
+
+        Object.values(this.layers || {}).forEach(group => {
+            if (!group || typeof group.getLayers !== 'function') return;
+            group.getLayers().forEach(testLayer);
+        });
+
+        // Убираем дубликаты по (type,id)
+        const uniq = new Map();
+        hits.forEach(h => {
+            const key = `${h.objectType}:${h.properties?.id}`;
+            if (!uniq.has(key)) uniq.set(key, h);
+        });
+        return Array.from(uniq.values());
     },
 
     /**
@@ -411,6 +524,10 @@ const MapManager = {
             status_name: 'Состояние',
             owner_name: 'Собственник',
             fiber_count: 'Кол-во волокон',
+            cable_type_name: 'Тип кабеля',
+            object_type_name: 'Вид объекта',
+            marking: 'Кабель (из каталога)',
+            length_calculated: 'Длина расч. (м)',
             length_m: 'Длина (м)',
             start_well: 'Начало',
             end_well: 'Конец',

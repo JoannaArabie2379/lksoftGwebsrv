@@ -955,6 +955,13 @@ tr:hover {
     background: var(--bg-tertiary);
 }
 
+/* Курсор "рука" на интерактивных объектах карты */
+.leaflet-interactive,
+.leaflet-marker-icon,
+.leaflet-div-icon {
+    cursor: pointer;
+}
+
 .leaflet-popup-content-wrapper {
     background: var(--bg-card);
     color: var(--text-primary);

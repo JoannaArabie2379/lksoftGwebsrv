@@ -63,6 +63,9 @@ const App = {
         // Инициализируем карту
         MapManager.init();
 
+        // Применяем начальную видимость слоёв по чекбоксам
+        document.querySelectorAll('.layer-item input').forEach(input => this.handleLayerToggle(input));
+
         // Загружаем справочники для фильтров (не блокируем основной поток)
         this.loadFilterOptions().catch(err => console.error('Ошибка загрузки фильтров:', err));
 

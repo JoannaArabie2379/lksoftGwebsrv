@@ -87,7 +87,7 @@ class UnifiedCableController extends BaseController
             $where = $geomCondition;
         }
 
-        $sql = "SELECT c.id, c.number, 
+        $sql = "SELECT c.id, c.number, c.length_calculated,
                        CASE 
                            WHEN ot.code = 'cable_duct' THEN (
                                SELECT ST_AsGeoJSON(ST_Collect(cd.geom_wgs84))::json
@@ -100,10 +100,12 @@ class UnifiedCableController extends BaseController
                        END as geometry,
                        c.owner_id, o.name as owner_name,
                        ot.code as object_type_code, ot.name as object_type_name, ot.color as object_type_color,
+                       ct.name as cable_type_name,
                        os.name as status_name, os.color as status_color,
                        cc.fiber_count, cc.marking
                 FROM cables c
                 LEFT JOIN cable_catalog cc ON c.cable_catalog_id = cc.id
+                LEFT JOIN cable_types ct ON c.cable_type_id = ct.id
                 LEFT JOIN owners o ON c.owner_id = o.id
                 LEFT JOIN object_types ot ON c.object_type_id = ot.id
                 LEFT JOIN object_status os ON c.status_id = os.id
@@ -705,18 +707,31 @@ class UnifiedCableController extends BaseController
     public function routeDirectionsGeojson(string $id): void
     {
         $cableId = (int) $id;
-        $rows = $this->db->fetchAll(
-            "SELECT DISTINCT cd.id, cd.number,
-                    ST_AsGeoJSON(cd.geom_wgs84)::json as geometry
-             FROM cable_route_channels crc
-             JOIN cable_channels ch ON crc.cable_channel_id = ch.id
-             JOIN channel_directions cd ON ch.direction_id = cd.id
-             WHERE crc.cable_id = :id AND cd.geom_wgs84 IS NOT NULL",
-            ['id' => $cableId]
-        );
+        try {
+            $rows = $this->db->fetchAll(
+                "SELECT cd.id, cd.number,
+                        ST_AsGeoJSON(cd.geom_wgs84) as geometry
+                 FROM cable_route_channels crc
+                 JOIN cable_channels ch ON crc.cable_channel_id = ch.id
+                 JOIN channel_directions cd ON ch.direction_id = cd.id
+                 WHERE crc.cable_id = :id AND cd.geom_wgs84 IS NOT NULL",
+                ['id' => $cableId]
+            );
+        } catch (\PDOException $e) {
+            // Безопасно возвращаем пустой слой вместо 500
+            Response::geojson([], ['layer' => 'route_directions', 'count' => 0]);
+        }
 
         $features = [];
+        $seen = [];
         foreach ($rows as $row) {
+            $dirId = (int) ($row['id'] ?? 0);
+            if ($dirId && isset($seen[$dirId])) {
+                continue;
+            }
+            if ($dirId) {
+                $seen[$dirId] = true;
+            }
             $geometry = is_string($row['geometry']) ? json_decode($row['geometry'], true) : $row['geometry'];
             unset($row['geometry']);
             if (empty($geometry) || !isset($geometry['type'])) continue;

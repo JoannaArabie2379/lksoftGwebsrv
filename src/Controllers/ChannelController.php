@@ -91,7 +91,7 @@ class ChannelController extends BaseController
 
         $sql = "SELECT cd.id, cd.number, 
                        ST_AsGeoJSON(cd.geom_wgs84)::json as geometry,
-                       cd.owner_id, cd.type_id,
+                       cd.owner_id, cd.type_id, cd.length_m,
                        o.name as owner_name,
                        ot.name as type_name, ot.color as type_color,
                        sw.number as start_well,
