@@ -31,6 +31,8 @@ const MapManager = {
     // Подписи колодцев
     wellLabelsEnabled: true,
     wellLabelsLayer: null,
+    wellLabelsMinZoom: 15,
+    initialViewLocked: true,
 
     // Цвета для слоёв
     colors: {
@@ -75,10 +77,10 @@ const MapManager = {
      * Инициализация карты
      */
     init() {
-        // Создаём карту без начального центра - будет установлен после загрузки объектов
+        // Создаём карту с заданным центром/зумом по умолчанию
         this.map = L.map('map', {
-            center: [66.101137, 76.641269], // Новый Уренгой (WGS84)
-            zoom: 10,
+            center: [66.10231, 76.68617],
+            zoom: 14,
             zoomControl: true,
         });
 
@@ -109,6 +111,10 @@ const MapManager = {
 
         // Клик по карте
         this.map.on('click', (e) => this.onMapClick(e));
+
+        // Авто-скрытие подписей колодцев по зуму
+        this.map.on('zoomend', () => this.updateWellLabelsVisibility());
+        this.updateWellLabelsVisibility();
 
         console.log('Карта инициализирована');
     },
@@ -144,10 +150,7 @@ const MapManager = {
         const loaded = results.filter(r => r.status === 'fulfilled').length;
         console.log(`Загружено слоёв: ${loaded}/${results.length}`);
         
-        // Подгоняем карту под объекты с небольшой задержкой для гарантии отрисовки
-        setTimeout(() => {
-            this.fitToAllObjects();
-        }, 100);
+        // Не подгоняем автоматически (фиксированный стартовый зум/центр по ТЗ)
     },
 
     /**
@@ -181,7 +184,8 @@ const MapManager = {
             if (validFeatures.length > 0) {
                 L.geoJSON({ type: 'FeatureCollection', features: validFeatures }, {
                     pointToLayer: (feature, latlng) => {
-                        const color = feature.properties.status_color || this.colors.wells;
+                        // Цвет символа колодца — из справочника "Виды объектов" (object_types.well.color)
+                        const color = this.colors.wells;
                         return L.circleMarker(latlng, {
                             radius: 8,
                             fillColor: color,
@@ -220,7 +224,8 @@ const MapManager = {
 
                         // Подпись номера над колодцем (отдельный слой)
                         if (this.wellLabelsEnabled && this.wellLabelsLayer && feature?.properties?.number) {
-                            const labelColor = feature.properties.status_color || this.colors.wells;
+                            // Цвет текста подписи — из справочника "Состояние" (object_status.color)
+                            const labelColor = feature.properties.status_color || '#ffffff';
                             const label = L.marker(layer.getLatLng(), {
                                 interactive: false,
                                 keyboard: false,
@@ -241,20 +246,29 @@ const MapManager = {
                         `, { permanent: false, direction: 'top' });
                     },
                 }).addTo(this.layers.wells);
+                // Обновляем видимость слоя подписей после перерисовки
+                this.updateWellLabelsVisibility();
             }
         } catch (error) {
             console.error('Ошибка загрузки колодцев:', error);
         }
     },
 
+    updateWellLabelsVisibility() {
+        if (!this.map || !this.wellLabelsLayer) return;
+        const shouldShow = this.wellLabelsEnabled && this.map.getZoom() >= this.wellLabelsMinZoom;
+        const hasLayer = this.map.hasLayer(this.wellLabelsLayer);
+        if (shouldShow && !hasLayer) this.map.addLayer(this.wellLabelsLayer);
+        if (!shouldShow && hasLayer) this.map.removeLayer(this.wellLabelsLayer);
+    },
+
     setWellLabelsEnabled(enabled) {
         this.wellLabelsEnabled = !!enabled;
-        if (!this.map || !this.wellLabelsLayer) return;
+        // При включении — перерисуем подписи (иначе слой может быть пуст после скрытия)
         if (this.wellLabelsEnabled) {
-            this.map.addLayer(this.wellLabelsLayer);
-        } else {
-            this.map.removeLayer(this.wellLabelsLayer);
+            this.loadWells();
         }
+        this.updateWellLabelsVisibility();
     },
 
     toggleWellLabels() {

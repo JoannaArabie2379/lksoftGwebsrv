@@ -70,7 +70,12 @@ class IncidentDocumentController extends BaseController
         $subDir = 'incident_documents';
         $uploadPath = ($this->config['upload_path'] ?? (__DIR__ . '/../../uploads')) . '/' . $subDir;
         if (!is_dir($uploadPath)) {
-            mkdir($uploadPath, 0755, true);
+            if (!mkdir($uploadPath, 0755, true) && !is_dir($uploadPath)) {
+                Response::error('Ошибка создания директории для загрузки', 500);
+            }
+        }
+        if (!is_writable($uploadPath)) {
+            Response::error('Директория загрузки недоступна для записи', 500);
         }
 
         $filename = uniqid() . '_' . time() . '.' . $ext;
