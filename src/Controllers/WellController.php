@@ -462,4 +462,274 @@ class WellController extends BaseController
         fclose($output);
         exit;
     }
+
+    /**
+     * POST /api/wells/import-text/preview
+     * Предпросмотр импорта колодцев из многострочного текста
+     */
+    public function importTextPreview(): void
+    {
+        $this->checkWriteAccess();
+
+        $text = (string) $this->request->input('text', '');
+        $delimiterRaw = (string) $this->request->input('delimiter', ';');
+        $delimiter = $this->normalizeCsvDelimiter($delimiterRaw, ';');
+
+        $lines = preg_split("/\r\n|\n|\r/", $text);
+        $lines = array_values(array_filter(array_map('trim', $lines), fn($l) => $l !== ''));
+
+        $previewRows = [];
+        $maxCols = 0;
+        foreach (array_slice($lines, 0, 20) as $line) {
+            $row = str_getcsv($line, $delimiter);
+            $row = array_map(fn($v) => trim((string) $v), $row ?: []);
+            $maxCols = max($maxCols, count($row));
+            $previewRows[] = $row;
+        }
+
+        Response::success([
+            'total_lines' => count($lines),
+            'max_columns' => $maxCols,
+            'preview' => $previewRows,
+            'fields' => [
+                // основные
+                'number', 'owner_id', 'type_id', 'kind_id', 'status_id',
+                // координаты (в зависимости от выбранной СК)
+                'longitude', 'latitude', 'x_msk86', 'y_msk86',
+                // опциональные
+                'depth', 'material', 'installation_date', 'notes',
+            ],
+        ]);
+    }
+
+    /**
+     * POST /api/wells/import-text
+     * Импорт колодцев из многострочного текста с сопоставлением колонок
+     */
+    public function importText(): void
+    {
+        $this->checkWriteAccess();
+
+        $text = (string) $this->request->input('text', '');
+        $delimiterRaw = (string) $this->request->input('delimiter', ';');
+        $delimiter = $this->normalizeCsvDelimiter($delimiterRaw, ';');
+        $mapping = $this->request->input('mapping', []);
+        $coordinateSystem = (string) $this->request->input('coordinate_system', 'wgs84');
+        if (!in_array($coordinateSystem, ['wgs84', 'msk86'], true)) {
+            $coordinateSystem = 'wgs84';
+        }
+
+        if (!is_array($mapping)) {
+            Response::error('Некорректное сопоставление колонок', 422);
+        }
+
+        $lines = preg_split("/\r\n|\n|\r/", $text);
+        $lines = array_values(array_filter(array_map('trim', $lines), fn($l) => $l !== ''));
+
+        if (count($lines) === 0) {
+            Response::error('Пустой текст для импорта', 422);
+        }
+
+        $user = Auth::user();
+
+        // Кэши справочников (поиск id по коду/имени)
+        $ownersByKey = [];
+        $typesByKey = [];
+        $kindsByKey = [];
+        $statusByKey = [];
+
+        $resolve = function (string $field, string $value) use (&$ownersByKey, &$typesByKey, &$kindsByKey, &$statusByKey) {
+            $v = trim($value);
+            if ($v === '') return null;
+            if (is_numeric($v)) return (int) $v;
+
+            $key = mb_strtolower($v);
+            $cache = null;
+            $table = null;
+            $sql = null;
+
+            if ($field === 'owner_id') {
+                $cache = &$ownersByKey;
+                $table = 'owners';
+                $sql = "SELECT id FROM owners WHERE LOWER(code) = :k OR LOWER(name) = :k OR LOWER(COALESCE(short_name, '')) = :k LIMIT 1";
+            } elseif ($field === 'type_id') {
+                $cache = &$typesByKey;
+                $table = 'object_types';
+                $sql = "SELECT id FROM object_types WHERE LOWER(code) = :k OR LOWER(name) = :k LIMIT 1";
+            } elseif ($field === 'kind_id') {
+                $cache = &$kindsByKey;
+                $table = 'object_kinds';
+                $sql = "SELECT id FROM object_kinds WHERE LOWER(code) = :k OR LOWER(name) = :k LIMIT 1";
+            } elseif ($field === 'status_id') {
+                $cache = &$statusByKey;
+                $table = 'object_status';
+                $sql = "SELECT id FROM object_status WHERE LOWER(code) = :k OR LOWER(name) = :k LIMIT 1";
+            } else {
+                return $v;
+            }
+
+            if (isset($cache[$key])) return $cache[$key];
+
+            $db = $this->db;
+            $row = $db->fetch($sql, ['k' => $key]);
+            $cache[$key] = $row ? (int) $row['id'] : null;
+            return $cache[$key];
+        };
+
+        $created = [];
+        $errors = [];
+        $imported = 0;
+
+        try {
+            $this->db->beginTransaction();
+
+            foreach ($lines as $idx => $line) {
+                $lineNo = $idx + 1;
+                try {
+                    $cols = str_getcsv($line, $delimiter);
+                    $cols = array_map(fn($v) => trim((string) $v), $cols ?: []);
+
+                    $data = [];
+                    foreach ($mapping as $colIndex => $fieldName) {
+                        if ($fieldName === null || $fieldName === '' || $fieldName === 'ignore') continue;
+                        $i = (int) $colIndex;
+                        $val = $cols[$i] ?? '';
+                        $val = is_string($val) ? trim($val) : $val;
+                        $data[$fieldName] = ($val === '' ? null : $val);
+                    }
+
+                    // Минимальные обязательные поля
+                    $number = (string) ($data['number'] ?? '');
+                    $number = trim($number);
+                    if ($number === '') {
+                        throw new \RuntimeException('Не указан номер (number)');
+                    }
+                    if (mb_strlen($number) > 50) {
+                        throw new \RuntimeException('Номер слишком длинный (max 50)');
+                    }
+
+                    // Справочники
+                    foreach (['owner_id', 'type_id', 'kind_id', 'status_id'] as $f) {
+                        $raw = (string) ($data[$f] ?? '');
+                        $resolved = $resolve($f, $raw);
+                        if (!$resolved) {
+                            throw new \RuntimeException("Не удалось определить {$f}");
+                        }
+                        $data[$f] = (int) $resolved;
+                    }
+
+                    // Координаты
+                    $lon = $data['longitude'] ?? null;
+                    $lat = $data['latitude'] ?? null;
+                    $x = $data['x_msk86'] ?? null;
+                    $y = $data['y_msk86'] ?? null;
+
+                    if ($coordinateSystem === 'wgs84') {
+                        if ($lon === null || $lat === null || !is_numeric($lon) || !is_numeric($lat)) {
+                            throw new \RuntimeException('Не указаны корректные координаты longitude/latitude (WGS84)');
+                        }
+                    } else {
+                        if ($x === null || $y === null || !is_numeric($x) || !is_numeric($y)) {
+                            throw new \RuntimeException('Не указаны корректные координаты x_msk86/y_msk86 (МСК86)');
+                        }
+                    }
+
+                    // Опциональные поля
+                    $optional = [
+                        'depth' => 'numeric',
+                        'material' => 'string',
+                        'installation_date' => 'date',
+                        'notes' => 'string',
+                    ];
+                    foreach ($optional as $field => $kind) {
+                        if (!array_key_exists($field, $data)) continue;
+                        if ($data[$field] === null) continue;
+                        if ($kind === 'numeric' && !is_numeric($data[$field])) {
+                            throw new \RuntimeException("Некорректное значение {$field}");
+                        }
+                        if ($kind === 'date') {
+                            $ts = strtotime((string) $data[$field]);
+                            if ($ts === false) {
+                                throw new \RuntimeException("Некорректная дата {$field}");
+                            }
+                            $data[$field] = date('Y-m-d', $ts);
+                        }
+                    }
+
+                    // created/updated
+                    $data['created_by'] = $user['id'];
+                    $data['updated_by'] = $user['id'];
+                    $data['number'] = $number;
+
+                    // Вставка
+                    if ($coordinateSystem === 'wgs84') {
+                        $sql = "INSERT INTO wells (number, geom_wgs84, owner_id, type_id, kind_id, status_id, depth, material, installation_date, notes, created_by, updated_by)
+                                VALUES (:number, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
+                                        :owner_id, :type_id, :kind_id, :status_id, :depth, :material, :installation_date, :notes, :created_by, :updated_by)
+                                RETURNING id";
+                        $params = [
+                            'number' => $data['number'],
+                            'lon' => (float) $lon,
+                            'lat' => (float) $lat,
+                            'owner_id' => $data['owner_id'],
+                            'type_id' => $data['type_id'],
+                            'kind_id' => $data['kind_id'],
+                            'status_id' => $data['status_id'],
+                            'depth' => $data['depth'] ?? null,
+                            'material' => $data['material'] ?? null,
+                            'installation_date' => $data['installation_date'] ?? null,
+                            'notes' => $data['notes'] ?? null,
+                            'created_by' => $data['created_by'],
+                            'updated_by' => $data['updated_by'],
+                        ];
+                    } else {
+                        $sql = "WITH geom_point AS (
+                                    SELECT ST_SetSRID(ST_MakePoint(:x, :y), 200004) as msk86_point
+                                )
+                                INSERT INTO wells (number, geom_wgs84, geom_msk86, owner_id, type_id, kind_id, status_id, depth, material, installation_date, notes, created_by, updated_by)
+                                SELECT :number,
+                                       ST_Transform(msk86_point, 4326),
+                                       msk86_point,
+                                       :owner_id, :type_id, :kind_id, :status_id,
+                                       :depth, :material, :installation_date, :notes, :created_by, :updated_by
+                                FROM geom_point
+                                RETURNING id";
+                        $params = [
+                            'number' => $data['number'],
+                            'x' => (float) $x,
+                            'y' => (float) $y,
+                            'owner_id' => $data['owner_id'],
+                            'type_id' => $data['type_id'],
+                            'kind_id' => $data['kind_id'],
+                            'status_id' => $data['status_id'],
+                            'depth' => $data['depth'] ?? null,
+                            'material' => $data['material'] ?? null,
+                            'installation_date' => $data['installation_date'] ?? null,
+                            'notes' => $data['notes'] ?? null,
+                            'created_by' => $data['created_by'],
+                            'updated_by' => $data['updated_by'],
+                        ];
+                    }
+
+                    $stmt = $this->db->query($sql, $params);
+                    $newId = (int) $stmt->fetchColumn();
+                    $imported++;
+                    $created[] = ['line' => $lineNo, 'id' => $newId, 'number' => $data['number']];
+                } catch (\Throwable $e) {
+                    $errors[] = ['line' => $lineNo, 'error' => $e->getMessage()];
+                }
+            }
+
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            Response::error('Ошибка импорта: ' . $e->getMessage(), 500);
+        }
+
+        Response::success([
+            'imported' => $imported,
+            'created' => $created,
+            'errors' => $errors,
+        ], "Импортировано {$imported} записей");
+    }
 }

@@ -174,6 +174,8 @@ $router->delete('/api/references/{type}/{id}', [ReferenceController::class, 'des
 $router->get('/api/wells', [WellController::class, 'index'], ['auth']);
 $router->get('/api/wells/geojson', [WellController::class, 'geojson'], ['auth']);
 $router->get('/api/wells/export', [WellController::class, 'export'], ['auth']);
+$router->post('/api/wells/import-text/preview', [WellController::class, 'importTextPreview'], ['auth']);
+$router->post('/api/wells/import-text', [WellController::class, 'importText'], ['auth']);
 $router->get('/api/wells/{id}', [WellController::class, 'show'], ['auth']);
 $router->post('/api/wells', [WellController::class, 'store'], ['auth']);
 $router->put('/api/wells/{id}', [WellController::class, 'update'], ['auth']);

@@ -310,6 +310,14 @@ const API = {
         delete(id) {
             return API.delete(`/wells/${id}`);
         },
+
+        importTextPreview(text, delimiter = ';') {
+            return API.post('/wells/import-text/preview', { text, delimiter });
+        },
+
+        importText(text, delimiter, mapping, coordinate_system = 'wgs84') {
+            return API.post('/wells/import-text', { text, delimiter, mapping, coordinate_system });
+        },
     },
 
     // ========================

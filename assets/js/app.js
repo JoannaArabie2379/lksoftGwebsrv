@@ -360,6 +360,23 @@ const App = {
         localStorage.setItem('igs_theme', theme);
     },
 
+    isAdmin() {
+        return this.user?.role?.code === 'admin';
+    },
+
+    hasPermission(key) {
+        const p = this.user?.permissions || {};
+        return p?.all === true || p?.[key] === true;
+    },
+
+    canWrite() {
+        return this.hasPermission('write');
+    },
+
+    canDelete() {
+        return this.hasPermission('delete');
+    },
+
     /**
      * Установка системы координат
      */
@@ -514,6 +531,12 @@ const App = {
             if (tab === 'unified_cables') {
                 this.loadCableListFilters();
             }
+        }
+
+        // Кнопка "Загрузить" доступна только для вкладки "Колодцы"
+        const importBtn = document.getElementById('btn-import');
+        if (importBtn) {
+            importBtn.classList.toggle('hidden', tab !== 'wells' || !this.canWrite());
         }
 
         this.loadObjects();
@@ -3361,68 +3384,233 @@ const App = {
     },
 
     /**
-     * Модальное окно импорта
+     * Модальное окно "Загрузить" (импорт колодцев из текста)
      */
     showImportModal() {
+        if (this.currentTab !== 'wells') {
+            this.notify('Загрузка доступна только для объекта "Колодцы"', 'info');
+            return;
+        }
+        if (!this.canWrite()) {
+            this.notify('Недостаточно прав для загрузки', 'error');
+            return;
+        }
+
         const content = `
-            <form id="import-form">
-                <div class="form-group">
-                    <label>Тип объекта</label>
-                    <select name="target_table" required>
-                        <option value="wells">Колодцы</option>
-                        <option value="marker_posts">Столбики</option>
-                        <option value="ground_cables">Кабели в грунте</option>
-                        <option value="aerial_cables">Воздушные кабели</option>
-                    </select>
+            <div style="display:grid; gap: 12px;">
+                <div style="display:flex; gap: 10px; flex-wrap: wrap; align-items: end;">
+                    <div class="form-group" style="min-width: 220px;">
+                        <label>Система координат</label>
+                        <select id="well-import-coord-system">
+                            <option value="wgs84" selected>WGS84 (longitude/latitude)</option>
+                            <option value="msk86">МСК86 Зона 4 (x_msk86/y_msk86)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="min-width: 220px;">
+                        <label>Разделитель</label>
+                        <select id="well-import-delimiter">
+                            <option value=";" selected>;</option>
+                            <option value=",">,</option>
+                            <option value="tab">TAB</option>
+                            <option value="|">|</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <button class="btn btn-secondary" type="button" onclick="App.previewWellTextImport()">
+                            <i class="fas fa-eye"></i> Предпросмотр
+                        </button>
+                    </div>
                 </div>
+
                 <div class="form-group">
-                    <label>Файл CSV</label>
-                    <input type="file" name="file" accept=".csv" required>
+                    <label>Данные (многострочный текст)</label>
+                    <textarea id="well-import-text" rows="10" placeholder="Вставьте строки. Каждая строка — 1 колодец."></textarea>
+                    <p class="text-muted" style="margin-top:6px;">
+                        Ниже появится предпросмотр и сопоставление колонок полям. Поле "Система координат" отдельно — вверху (по умолчанию WGS84).
+                    </p>
                 </div>
-                <div class="form-group">
-                    <label>Система координат</label>
-                    <select name="coordinate_system">
-                        <option value="wgs84">WGS84 (долгота, широта)</option>
-                        <option value="msk86">МСК86 Зона 4 (X, Y)</option>
-                    </select>
-                </div>
-            </form>
-            <div id="import-preview" class="hidden" style="margin-top: 16px;"></div>
+
+                <div id="well-import-preview" class="hidden"></div>
+                <div id="well-import-mapping" class="hidden"></div>
+                <div id="well-import-result" class="hidden"></div>
+            </div>
         `;
 
         const footer = `
             <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
-            <button class="btn btn-primary" onclick="App.previewImport()">Предпросмотр</button>
+            <button class="btn btn-primary" onclick="App.executeWellTextImport()">Загрузить</button>
         `;
 
-        this.showModal('Импорт данных', content, footer);
+        this.showModal('Загрузить: колодцы', content, footer);
+
+        // Автопредпросмотр с задержкой
+        setTimeout(() => {
+            const ta = document.getElementById('well-import-text');
+            const del = document.getElementById('well-import-delimiter');
+            const cs = document.getElementById('well-import-coord-system');
+            const handler = () => this.scheduleWellImportPreview();
+            ta?.addEventListener('input', handler);
+            del?.addEventListener('change', handler);
+            cs?.addEventListener('change', handler);
+        }, 0);
     },
 
     /**
-     * Предпросмотр импорта
+     * Debounce предпросмотра
      */
-    async previewImport() {
-        const form = document.getElementById('import-form');
-        const file = form.querySelector('input[name="file"]').files[0];
-        
-        if (!file) {
-            this.notify('Выберите файл', 'warning');
+    scheduleWellImportPreview() {
+        clearTimeout(this._wellImportPreviewTimer);
+        this._wellImportPreviewTimer = setTimeout(() => this.previewWellTextImport(), 300);
+    },
+
+    async previewWellTextImport() {
+        const text = document.getElementById('well-import-text')?.value || '';
+        const delimiter = document.getElementById('well-import-delimiter')?.value || ';';
+
+        const previewEl = document.getElementById('well-import-preview');
+        const mappingEl = document.getElementById('well-import-mapping');
+        const resultEl = document.getElementById('well-import-result');
+        if (resultEl) resultEl.classList.add('hidden');
+
+        if (!previewEl || !mappingEl) return;
+        if (!text.trim()) {
+            previewEl.classList.add('hidden');
+            mappingEl.classList.add('hidden');
             return;
         }
 
         try {
-            const response = await API.import.previewCsv(file);
-            if (response.success) {
-                const preview = document.getElementById('import-preview');
-                preview.classList.remove('hidden');
-                preview.innerHTML = `
-                    <p>Найдено ${response.data.total_rows} записей</p>
-                    <p>Колонки: ${response.data.headers.join(', ')}</p>
-                    <button class="btn btn-success" onclick="App.executeImport()">Выполнить импорт</button>
+            const resp = await API.wells.importTextPreview(text, delimiter);
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка предпросмотра', 'error');
+                return;
+            }
+
+            const data = resp.data || {};
+            const rows = data.preview || [];
+            const maxCols = data.max_columns || 0;
+            const total = data.total_lines || 0;
+            const fields = data.fields || [];
+
+            this._wellImportMaxCols = maxCols;
+            this._wellImportFields = fields;
+
+            previewEl.classList.remove('hidden');
+            previewEl.innerHTML = `
+                <div style="margin-top: 6px;">
+                    <strong>Предпросмотр:</strong>
+                    <span class="text-muted">(строк: ${total}, колонок (макс): ${maxCols})</span>
+                </div>
+                <div style="max-height: 220px; overflow:auto; border: 1px solid var(--border-color); border-radius: 8px; margin-top: 8px;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr>
+                                ${Array.from({ length: maxCols }).map((_, i) => `<th style="text-align:left; padding:6px 8px; border-bottom:1px solid var(--border-color);">#${i + 1}</th>`).join('')}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map(r => `
+                                <tr>
+                                    ${Array.from({ length: maxCols }).map((_, i) => `<td style="padding:6px 8px; border-bottom:1px solid var(--border-color);">${this.escapeHtml(r?.[i] ?? '')}</td>`).join('')}
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            mappingEl.classList.remove('hidden');
+            mappingEl.innerHTML = `
+                <div style="margin-top: 10px;">
+                    <strong>Сопоставление колонок</strong>
+                    <p class="text-muted" style="margin-top:6px;">Выберите, какая колонка соответствует какому полю (можно не использовать колонку).</p>
+                </div>
+                <div style="display:grid; gap: 8px;">
+                    ${Array.from({ length: maxCols }).map((_, i) => `
+                        <div style="display:flex; gap: 10px; align-items:center;">
+                            <div style="min-width: 90px;"><strong>#${i + 1}</strong></div>
+                            <select id="well-import-map-${i}" style="flex: 1;">
+                                <option value="ignore">Не использовать</option>
+                                ${fields.map(f => `<option value="${f}">${f}</option>`).join('')}
+                            </select>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка предпросмотра', 'error');
+        }
+    },
+
+    collectWellImportMapping() {
+        const maxCols = this._wellImportMaxCols || 0;
+        const mapping = {};
+        const used = new Map();
+        for (let i = 0; i < maxCols; i++) {
+            const val = document.getElementById(`well-import-map-${i}`)?.value || 'ignore';
+            if (!val || val === 'ignore') continue;
+            if (used.has(val)) {
+                throw new Error(`Поле "${val}" выбрано более одного раза (колонки #${used.get(val) + 1} и #${i + 1})`);
+            }
+            used.set(val, i);
+            mapping[i] = val;
+        }
+        return mapping;
+    },
+
+    async executeWellTextImport() {
+        const text = document.getElementById('well-import-text')?.value || '';
+        const delimiter = document.getElementById('well-import-delimiter')?.value || ';';
+        const coordSystem = document.getElementById('well-import-coord-system')?.value || 'wgs84';
+        const resultEl = document.getElementById('well-import-result');
+
+        if (!text.trim()) {
+            this.notify('Вставьте данные для загрузки', 'warning');
+            return;
+        }
+
+        let mapping;
+        try {
+            mapping = this.collectWellImportMapping();
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка сопоставления колонок', 'error');
+            return;
+        }
+
+        try {
+            const resp = await API.wells.importText(text, delimiter, mapping, coordSystem);
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка загрузки', 'error');
+                return;
+            }
+
+            const data = resp.data || {};
+            const imported = data.imported || 0;
+            const errors = data.errors || [];
+
+            if (resultEl) {
+                resultEl.classList.remove('hidden');
+                resultEl.innerHTML = `
+                    <div style="margin-top: 10px;">
+                        <strong>Результат:</strong> импортировано <strong>${imported}</strong>
+                    </div>
+                    ${errors.length ? `
+                        <div style="margin-top: 8px;">
+                            <strong>Ошибки (${errors.length}):</strong>
+                            <div style="max-height: 180px; overflow:auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; margin-top: 6px;">
+                                ${errors.slice(0, 200).map(e => `<div class="text-muted">Строка ${e.line}: ${this.escapeHtml(e.error)}</div>`).join('')}
+                                ${errors.length > 200 ? `<div class="text-muted">... и ещё ${errors.length - 200}</div>` : ''}
+                            </div>
+                        </div>
+                    ` : '<div class="text-muted" style="margin-top:8px;">Ошибок нет.</div>'}
                 `;
             }
-        } catch (error) {
-            this.notify('Ошибка чтения файла', 'error');
+
+            this.notify(`Загрузка завершена: ${imported}`, 'success');
+            this.loadObjects();
+            MapManager.loadAllLayers();
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка загрузки', 'error');
         }
     },
 
