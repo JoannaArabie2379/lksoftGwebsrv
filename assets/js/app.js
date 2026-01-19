@@ -1745,6 +1745,15 @@ const App = {
         return new Date(date).toLocaleDateString('ru-RU');
     },
 
+    escapeHtml(value) {
+        return (value ?? '').toString()
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    },
+
     /**
      * Просмотр инцидента
      */
@@ -4273,6 +4282,38 @@ const App = {
     },
 
     showIncidentModal(incident) {
+        const photosHtml = (incident.photos || []).length ? `
+            <div>
+                <strong>Фотографии:</strong>
+                <ul style="margin-top:6px;">
+                    ${(incident.photos || []).map(p => `
+                        <li style="margin-bottom:6px;">
+                            <a href="${p.url || '#'}" target="_blank" download="${this.escapeHtml(p.original_filename || 'photo')}" rel="noopener">
+                                ${this.escapeHtml(p.original_filename || p.filename || 'Файл')}
+                            </a>
+                            ${p.description ? `<div class="text-muted" style="margin-top:2px;">${this.escapeHtml(p.description)}</div>` : ''}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        ` : '';
+
+        const docsHtml = (incident.documents || []).length ? `
+            <div>
+                <strong>Документы:</strong>
+                <ul style="margin-top:6px;">
+                    ${(incident.documents || []).map(d => `
+                        <li style="margin-bottom:6px;">
+                            <a href="${d.url || '#'}" target="_blank" download="${this.escapeHtml(d.original_filename || 'document')}" rel="noopener">
+                                ${this.escapeHtml(d.original_filename || d.filename || 'Файл')}
+                            </a>
+                            ${d.description ? `<div class="text-muted" style="margin-top:2px;">${this.escapeHtml(d.description)}</div>` : ''}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        ` : '';
+
         const content = `
             <div style="display: grid; gap: 12px;">
                 <div><strong>Номер:</strong> ${incident.number}</div>
@@ -4282,6 +4323,8 @@ const App = {
                 <div><strong>Описание:</strong> ${incident.description || '-'}</div>
                 <div><strong>Виновник:</strong> ${incident.culprit || '-'}</div>
                 <div><strong>Создал:</strong> ${incident.created_by_name || incident.created_by_login}</div>
+                ${photosHtml}
+                ${docsHtml}
                 ${incident.related_objects?.length ? `
                     <div><strong>Связанные объекты:</strong>
                         <ul>

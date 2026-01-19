@@ -106,12 +106,18 @@ class IncidentController extends BaseController
 
         // Фотографии
         $photos = $this->db->fetchAll(
-            "SELECT id, filename, original_filename, description, created_at 
+            "SELECT id, filename, original_filename, description, created_at, file_path, thumbnail_path
              FROM object_photos 
              WHERE object_table = 'incidents' AND object_id = :id 
              ORDER BY sort_order",
             ['id' => (int) $id]
         );
+        foreach ($photos as &$p) {
+            $p['url'] = '/uploads/incidents/' . $p['filename'];
+            if (!empty($p['thumbnail_path'])) {
+                $p['thumbnail_url'] = '/uploads/incidents/' . basename($p['thumbnail_path']);
+            }
+        }
         $incident['photos'] = $photos;
 
         // Документы
