@@ -255,12 +255,24 @@ class AuthController
             Response::error('Пользователь не найден', 404);
         }
 
-        // Вместо удаления деактивируем
-        $this->db->update('users', ['is_active' => false], 'id = :id', ['id' => $userId]);
-        
-        $this->auth->log('deactivate', 'users', $userId);
+        try {
+            $this->db->beginTransaction();
 
-        Response::success(null, 'Пользователь деактивирован');
+            // Удаляем сессии пользователя
+            $this->db->delete('user_sessions', 'user_id = :id', ['id' => $userId]);
+
+            // Удаляем пользователя (FK в объектах настроены как ON DELETE SET NULL / CASCADE)
+            $this->db->delete('users', 'id = :id', ['id' => $userId]);
+
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            throw $e;
+        }
+
+        $this->auth->log('delete', 'users', $userId, $user, null);
+
+        Response::success(null, 'Пользователь удалён');
     }
 
     /**
