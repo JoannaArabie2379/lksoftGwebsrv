@@ -61,6 +61,25 @@ const App = {
             document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
         }
 
+        // Управление справочниками (создание/редактирование/удаление) — только администратор
+        if (!this.canManageReferences()) {
+            document.getElementById('btn-add-ref')?.classList.add('hidden');
+        }
+
+        // Ограничения на запись/удаление (роль "только чтение" и т.п.)
+        if (!this.canWrite()) {
+            document.getElementById('btn-add-object')?.classList.add('hidden');
+            document.getElementById('btn-add-incident')?.classList.add('hidden');
+            document.getElementById('btn-import')?.classList.add('hidden');
+            document.getElementById('btn-edit-object')?.classList.add('hidden');
+        }
+        if (!this.canDelete()) {
+            document.getElementById('btn-delete-object')?.classList.add('hidden');
+        }
+
+        // Кнопка "Загрузить" доступна только для колодцев + права на запись
+        document.getElementById('btn-import')?.classList.toggle('hidden', this.currentTab !== 'wells' || !this.canWrite());
+
         // Инициализируем карту
         MapManager.init();
 
@@ -375,6 +394,10 @@ const App = {
 
     canDelete() {
         return this.hasPermission('delete');
+    },
+
+    canManageReferences() {
+        return this.isAdmin();
     },
 
     /**
@@ -721,9 +744,11 @@ const App = {
                     <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
                         <i class="fas fa-eye"></i>
                     </button>
-                    <button class="btn btn-sm btn-primary" onclick="App.editObject(${row.id})" title="Редактировать">
-                        <i class="fas fa-edit"></i>
-                    </button>
+                    ${this.canWrite() ? `
+                        <button class="btn btn-sm btn-primary" onclick="App.editObject(${row.id})" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                    ` : ''}
                 </td>
             </tr>
         `).join('');
@@ -2241,21 +2266,24 @@ const App = {
         }
 
         const columns = Object.keys(data[0]).filter(k => !['id', 'created_at', 'updated_at', 'permissions'].includes(k));
+        const canManage = this.canManageReferences();
         
         document.getElementById('ref-table-header').innerHTML = 
-            columns.slice(0, 5).map(col => `<th>${col}</th>`).join('') + '<th>Действия</th>';
+            columns.slice(0, 5).map(col => `<th>${col}</th>`).join('') + (canManage ? '<th>Действия</th>' : '');
         
         document.getElementById('ref-table-body').innerHTML = data.map(row => `
             <tr>
                 ${columns.slice(0, 5).map(col => `<td>${row[col] || '-'}</td>`).join('')}
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteReference(${row.id})">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </td>
+                ${canManage ? `
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="App.deleteReference(${row.id})">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                ` : ''}
             </tr>
         `).join('');
     },
@@ -2291,9 +2319,121 @@ const App = {
                     <button class="btn btn-sm btn-primary" onclick="App.editUser(${user.id})">
                         <i class="fas fa-edit"></i>
                     </button>
+                    <button class="btn btn-sm btn-danger" onclick="App.deleteUser(${user.id})" title="Удалить (деактивировать)">
+                        <i class="fas fa-trash"></i>
+                    </button>
                 </td>
             </tr>
         `).join('');
+    },
+
+    async editUser(id) {
+        try {
+            const resp = await API.users.list();
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка загрузки пользователей', 'error');
+                return;
+            }
+            const users = resp.data || [];
+            const user = users.find(u => String(u.id) === String(id));
+            if (!user) {
+                this.notify('Пользователь не найден', 'error');
+                return;
+            }
+
+            const content = `
+                <form id="user-edit-form">
+                    <input type="hidden" name="id" value="${user.id}">
+                    <div class="form-group">
+                        <label>Логин (только чтение)</label>
+                        <input type="text" value="${this.escapeHtml(user.login)}" readonly style="background: var(--bg-tertiary);">
+                    </div>
+                    <div class="form-group">
+                        <label>Пароль (мин. 6, оставить пустым — не менять)</label>
+                        <input type="password" name="password" minlength="6" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label>Полное имя</label>
+                        <input type="text" name="full_name" value="${this.escapeHtml(user.full_name || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" name="email" value="${this.escapeHtml(user.email || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label>Роль *</label>
+                        <select name="role_id" required id="user-edit-role-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" name="is_active" value="1" ${user.is_active ? 'checked' : ''}>
+                            Активен
+                        </label>
+                    </div>
+                </form>
+            `;
+
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+                <button class="btn btn-danger" onclick="App.deleteUser(${user.id})" style="margin-left:auto;">
+                    <i class="fas fa-trash"></i> Удалить
+                </button>
+                <button class="btn btn-primary" onclick="App.submitUserEdit(${user.id})">
+                    <i class="fas fa-save"></i> Сохранить
+                </button>
+            `;
+
+            this.showModal(`Пользователь: ${user.login}`, content, footer);
+            await this.loadRolesSelect('user-edit-role-select', user.role_code);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    async submitUserEdit(id) {
+        const form = document.getElementById('user-edit-form');
+        if (!form) return;
+
+        const fd = new FormData(form);
+        const data = Object.fromEntries(fd.entries());
+
+        // checkbox -> boolean
+        data.is_active = !!form.querySelector('input[name="is_active"]')?.checked;
+
+        // Пустой пароль не отправляем
+        if (!data.password) delete data.password;
+
+        // Приводим role_id к числу
+        if (data.role_id !== undefined) data.role_id = parseInt(data.role_id);
+
+        try {
+            const resp = await API.users.update(id, data);
+            if (resp?.success) {
+                this.hideModal();
+                this.notify('Пользователь обновлён', 'success');
+                this.loadUsers();
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    async deleteUser(id) {
+        if (!confirm('Удалить пользователя? (будет деактивирован)')) return;
+        try {
+            const resp = await API.users.delete(id);
+            if (resp?.success) {
+                this.notify('Пользователь деактивирован', 'success');
+                this.hideModal();
+                this.loadUsers();
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
     },
 
     /**
@@ -3895,12 +4035,12 @@ const App = {
         const content = `
             <form id="user-form">
                 <div class="form-group">
-                    <label>Логин *</label>
-                    <input type="text" name="login" required>
+                    <label>Логин * (3–100 символов, уникальный)</label>
+                    <input type="text" name="login" required minlength="3" maxlength="100" autocomplete="username">
                 </div>
                 <div class="form-group">
-                    <label>Пароль *</label>
-                    <input type="password" name="password" required>
+                    <label>Пароль * (мин. 6 символов)</label>
+                    <input type="password" name="password" required minlength="6" autocomplete="new-password">
                 </div>
                 <div class="form-group">
                     <label>Полное имя</label>
@@ -3908,10 +4048,10 @@ const App = {
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" name="email">
+                    <input type="email" name="email" placeholder="name@example.com">
                 </div>
                 <div class="form-group">
-                    <label>Роль *</label>
+                    <label>Роль * (обязательно)</label>
                     <select name="role_id" required id="user-role-select"></select>
                 </div>
             </form>
@@ -3929,12 +4069,15 @@ const App = {
     /**
      * Загрузка ролей в селект
      */
-    async loadRolesSelect() {
+    async loadRolesSelect(selectId = 'user-role-select', selectedRoleCode = null) {
         try {
             const response = await API.users.roles();
             if (response.success) {
-                document.getElementById('user-role-select').innerHTML = 
-                    response.data.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+                const select = document.getElementById(selectId);
+                if (!select) return;
+                select.innerHTML = response.data
+                    .map(r => `<option value="${r.id}" ${selectedRoleCode && r.code === selectedRoleCode ? 'selected' : ''}>${r.name}</option>`)
+                    .join('');
             }
         } catch (error) {
             console.error('Ошибка загрузки ролей:', error);
@@ -4646,12 +4789,16 @@ const App = {
 
         const footer = `
             <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
-            <button class="btn btn-danger" onclick="App.deleteIncident(${incident.id})" style="margin-left:auto;">
-                <i class="fas fa-trash"></i> Удалить
-            </button>
-            <button class="btn btn-primary" onclick="App.editIncident(${incident.id})">
-                <i class="fas fa-edit"></i> Редактировать
-            </button>
+            ${this.canDelete() ? `
+                <button class="btn btn-danger" onclick="App.deleteIncident(${incident.id})" style="margin-left:auto;">
+                    <i class="fas fa-trash"></i> Удалить
+                </button>
+            ` : ''}
+            ${this.canWrite() ? `
+                <button class="btn btn-primary" onclick="App.editIncident(${incident.id})" ${this.canDelete() ? '' : 'style="margin-left:auto;"'}>
+                    <i class="fas fa-edit"></i> Редактировать
+                </button>
+            ` : ''}
         `;
 
         this.showModal(`Инцидент: ${incident.number}`, content, footer);

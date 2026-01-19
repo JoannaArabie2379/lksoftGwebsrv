@@ -148,6 +148,9 @@ class ReferenceController extends BaseController
      */
     public function store(string $type): void
     {
+        if (!Auth::isAdmin()) {
+            Response::error('Доступ запрещён', 403);
+        }
         $this->checkWriteAccess();
         $config = $this->getConfig($type);
 
@@ -212,6 +215,9 @@ class ReferenceController extends BaseController
      */
     public function update(string $type, string $id): void
     {
+        if (!Auth::isAdmin()) {
+            Response::error('Доступ запрещён', 403);
+        }
         $this->checkWriteAccess();
         $config = $this->getConfig($type);
         $recordId = (int) $id;
@@ -269,6 +275,9 @@ class ReferenceController extends BaseController
      */
     public function destroy(string $type, string $id): void
     {
+        if (!Auth::isAdmin()) {
+            Response::error('Доступ запрещён', 403);
+        }
         $this->checkDeleteAccess();
         $config = $this->getConfig($type);
         $recordId = (int) $id;
