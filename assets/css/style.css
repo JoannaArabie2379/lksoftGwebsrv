@@ -387,6 +387,8 @@ a:hover {
     padding: 16px;
     overflow-y: auto;
     border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
 }
 
 .sidebar-panel h3 {
@@ -396,6 +398,11 @@ a:hover {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.sidebar-panel-links {
+    margin-top: auto;
+    padding-top: 12px;
 }
 
 /* Layers */
