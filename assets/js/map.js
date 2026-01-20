@@ -1397,6 +1397,18 @@ const MapManager = {
             let bounds = null;
             let cableGeometry = null;
 
+            const getLinePoints = (geom) => {
+                if (!geom || !geom.type) return [];
+                if (geom.type === 'LineString' && Array.isArray(geom.coordinates)) {
+                    return geom.coordinates;
+                }
+                if (geom.type === 'MultiLineString' && Array.isArray(geom.coordinates)) {
+                    // flatten lines -> points
+                    return geom.coordinates.flat();
+                }
+                return [];
+            };
+
             switch (objectType) {
                 case 'wells':
                 case 'well':
@@ -1457,7 +1469,7 @@ const MapManager = {
                             ? JSON.parse(response.data.geometry) 
                             : response.data.geometry;
                         if (geom && geom.coordinates) {
-                            const coords = geom.coordinates.flat();
+                            const coords = getLinePoints(geom);
                             const midIdx = Math.floor(coords.length / 2);
                             lng = coords[midIdx][0];
                             lat = coords[midIdx][1];
@@ -1474,7 +1486,7 @@ const MapManager = {
                             ? JSON.parse(response.data.geometry) 
                             : response.data.geometry;
                         if (geom && geom.coordinates) {
-                            const coords = geom.coordinates.flat();
+                            const coords = getLinePoints(geom);
                             const midIdx = Math.floor(coords.length / 2);
                             lng = coords[midIdx][0];
                             lat = coords[midIdx][1];
@@ -1493,7 +1505,7 @@ const MapManager = {
             setTimeout(() => {
                 if (bounds && bounds.isValid()) {
                     this.fitToBounds(bounds, 17);
-                } else if (lat && lng) {
+                } else if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
                     this.flyToObject(lat, lng, 16);
                 } else {
                     App.notify('Не удалось определить координаты объекта', 'warning');
