@@ -30,7 +30,7 @@ const MapManager = {
     incidentSelectMode: false,
 
     // Подписи колодцев
-    wellLabelsEnabled: true,
+    wellLabelsEnabled: false,
     wellLabelsLayer: null,
     wellLabelsMinZoom: 14,
     initialViewLocked: true,

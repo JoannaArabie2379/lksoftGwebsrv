@@ -233,16 +233,33 @@ const App = {
         // Отмена подсветки маршрута кабеля
         document.getElementById('btn-clear-highlight')?.addEventListener('click', () => MapManager.clearHighlight());
 
-        // Esc = отменить подсветку (аналогично кнопке "Отменить подсветку")
+        // Esc = отменить подсветку / отменить режимы добавления (аналогично кнопкам "Отменить ...")
         if (!this._boundEscHighlight) {
             this._boundEscHighlight = true;
             document.addEventListener('keydown', (e) => {
                 if (e.key !== 'Escape') return;
+
+                // 1) Отмена подсветки кабеля
                 const bar = document.getElementById('highlight-bar');
-                const visible = bar && !bar.classList.contains('hidden');
-                if (!visible) return;
+                const visibleHighlight = bar && !bar.classList.contains('hidden');
                 try {
-                    MapManager.clearHighlight();
+                    if (visibleHighlight) {
+                        MapManager.clearHighlight();
+                    }
+                } catch (_) {}
+
+                // 2) Отмена режимов добавления: направление / кабели (грунт/воздух/канализация)
+                try {
+                    const mm = (typeof MapManager !== 'undefined') ? MapManager : null;
+                    if (!mm) return;
+                    const anyAdd =
+                        !!mm.addDirectionMode ||
+                        !!mm.addCableMode ||
+                        !!mm.addDuctCableMode;
+                    if (!anyAdd) return;
+                    mm.cancelAddDirectionMode?.();
+                    mm.cancelAddCableMode?.();
+                    mm.cancelAddDuctCableMode?.();
                 } catch (_) {}
             });
         }
