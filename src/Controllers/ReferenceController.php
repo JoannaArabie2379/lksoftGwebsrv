@@ -19,7 +19,8 @@ class ReferenceController extends BaseController
     private array $references = [
         'object_types' => [
             'table' => 'object_types',
-            'fields' => ['code', 'name', 'description', 'icon', 'color', 'is_default'],
+            // "Виды объектов": default отключён по ТЗ (значение не выставляется через UI/API)
+            'fields' => ['code', 'name', 'description', 'icon', 'color'],
             'search' => ['code', 'name'],
         ],
         'object_kinds' => [

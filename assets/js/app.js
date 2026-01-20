@@ -73,6 +73,10 @@ const App = {
             document.getElementById('btn-add-incident')?.classList.add('hidden');
             document.getElementById('btn-import')?.classList.add('hidden');
             document.getElementById('btn-edit-object')?.classList.add('hidden');
+
+            // Инструменты добавления на карте тоже прячем
+            ['btn-add-direction-map', 'btn-add-well-map', 'btn-add-marker-map', 'btn-add-ground-cable-map', 'btn-add-aerial-cable-map', 'btn-add-duct-cable-map']
+                .forEach(id => document.getElementById(id)?.classList.add('hidden'));
         }
         if (!this.canDelete()) {
             document.getElementById('btn-delete-object')?.classList.add('hidden');
@@ -233,6 +237,7 @@ const App = {
         // Панель инструментов карты
         document.getElementById('btn-add-direction-map')?.addEventListener('click', () => MapManager.startAddDirectionMode());
         document.getElementById('btn-add-well-map')?.addEventListener('click', () => MapManager.startAddingObject('wells'));
+        document.getElementById('btn-add-marker-map')?.addEventListener('click', () => MapManager.startAddingObject('markers'));
         document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
         document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
         document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => MapManager.startAddDuctCableMode());
@@ -2387,7 +2392,37 @@ const App = {
             return;
         }
 
-        const columns = Object.keys(data[0]).filter(k => !['id', 'created_at', 'updated_at', 'permissions'].includes(k));
+        const columnsByType = {
+            object_types: ['code', 'name', 'description', 'icon', 'color'],
+            object_kinds: ['code', 'name', 'object_type_id', 'description', 'is_default'],
+            object_status: ['code', 'name', 'color', 'description', 'sort_order', 'is_default'],
+            owners: ['code', 'name', 'short_name', 'inn', 'address', 'contact_person', 'contact_phone', 'contact_email', 'notes', 'is_default'],
+            contracts: ['number', 'name', 'owner_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
+            cable_types: ['code', 'name', 'description', 'is_default'],
+            cable_catalog: ['cable_type_id', 'fiber_count', 'marking', 'description', 'is_default'],
+        };
+
+        const labelByType = {
+            object_types: { code: 'Код', name: 'Название', description: 'Описание', icon: 'Иконка', color: 'Цвет' },
+            object_kinds: { code: 'Код', name: 'Название', object_type_id: 'Вид объекта', description: 'Описание', is_default: 'По умолчанию' },
+            object_status: { code: 'Код', name: 'Название', color: 'Цвет', description: 'Описание', sort_order: 'Порядок', is_default: 'По умолчанию' },
+            owners: {
+                code: 'Код', name: 'Название', short_name: 'Краткое название', inn: 'ИНН',
+                address: 'Адрес', contact_person: 'Контактное лицо', contact_phone: 'Телефон', contact_email: 'Email',
+                notes: 'Примечания', is_default: 'По умолчанию'
+            },
+            contracts: {
+                number: 'Номер', name: 'Название', owner_id: 'Собственник',
+                start_date: 'Дата начала', end_date: 'Дата окончания', status: 'Статус', amount: 'Сумма',
+                notes: 'Примечания', is_default: 'По умолчанию'
+            },
+            cable_types: { code: 'Код', name: 'Название', description: 'Описание', is_default: 'По умолчанию' },
+            cable_catalog: { cable_type_id: 'Тип кабеля', fiber_count: 'Волокон', marking: 'Маркировка', description: 'Описание', is_default: 'По умолчанию' },
+        };
+
+        const type = this.currentReference || '';
+        const rawColumns = Object.keys(data[0]).filter(k => !['id', 'created_at', 'updated_at', 'permissions'].includes(k));
+        const columns = (columnsByType[type] || rawColumns).filter(col => rawColumns.includes(col));
         const canManage = this.canManageReferences();
 
         const formatCell = (col, value) => {
@@ -2397,11 +2432,11 @@ const App = {
         };
         
         document.getElementById('ref-table-header').innerHTML = 
-            columns.slice(0, 5).map(col => `<th>${col}</th>`).join('') + (canManage ? '<th>Действия</th>' : '');
+            columns.map(col => `<th>${(labelByType[type]?.[col] || col)}</th>`).join('') + (canManage ? '<th>Действия</th>' : '');
         
         document.getElementById('ref-table-body').innerHTML = data.map(row => `
             <tr>
-                ${columns.slice(0, 5).map(col => `<td>${formatCell(col, row[col])}</td>`).join('')}
+                ${columns.map(col => `<td>${formatCell(col, row[col])}</td>`).join('')}
                 ${canManage ? `
                     <td>
                         <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">
@@ -3065,6 +3100,7 @@ const App = {
             if (kinds.success && document.getElementById('modal-kind-select')) {
                 // Сохраняем все типы для фильтрации
                 this.allKinds = kinds.data;
+                let kindsHandled = false;
                 
                 // Для "Каналы" (cable_channels) вид объекта в форме не выбирается —
                 // берём дефолтные типы в рамках object_types.code === 'channel'
@@ -3078,14 +3114,14 @@ const App = {
                     kindSelect.innerHTML = '<option value="">Выберите...</option>' +
                         filtered.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
                     pickDefault(kindSelect);
-                    return;
+                    kindsHandled = true;
                 }
 
                 // Если уже выбран вид, фильтруем типы
                 const typeSelect = document.getElementById('modal-type-select');
-                if (typeSelect && typeSelect.value) {
+                if (!kindsHandled && typeSelect && typeSelect.value) {
                     this.filterKindsByType(typeSelect.value, kinds.data);
-                } else {
+                } else if (!kindsHandled) {
                     document.getElementById('modal-kind-select').innerHTML = 
                         '<option value="">Выберите...</option>' +
                         kinds.data.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
@@ -3095,6 +3131,7 @@ const App = {
             
             if (statuses.success && document.getElementById('modal-status-select')) {
                 document.getElementById('modal-status-select').innerHTML = 
+                    '<option value="">Выберите...</option>' +
                     statuses.data.map(s => `<option value="${s.id}" data-is-default="${s.is_default ? 1 : 0}">${s.name}</option>`).join('');
                 pickDefault(document.getElementById('modal-status-select'));
             }
@@ -4538,7 +4575,6 @@ const App = {
                     <label>Цвет</label>
                     <input type="color" name="color" value="${data.color || '#3498db'}">
                 </div>
-                ${defaultBlock}
             `,
             'object_kinds': `
                 <div class="form-group">
@@ -4840,8 +4876,11 @@ const App = {
         const formData = new FormData(form);
         const data = Object.fromEntries(formData.entries());
         
-        // Обработка чекбоксов
-        data.is_default = form.querySelector('input[name="is_default"]')?.checked ? true : false;
+        // Обработка чекбоксов (только если поле есть в форме)
+        const isDefaultCheckbox = form.querySelector('input[name="is_default"]');
+        if (isDefaultCheckbox !== null) {
+            data.is_default = isDefaultCheckbox.checked ? true : false;
+        }
 
         try {
             const response = await API.references.create(this.currentReference, data);
