@@ -823,9 +823,11 @@ const App = {
                             <i class="fas fa-images"></i>
                         </button>
                     ` : ''}
-                    <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
-                        <i class="fas fa-eye"></i>
-                    </button>
+                    ${this.currentTab === 'channels' ? '' : `
+                        <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    `}
                     ${this.canWrite() ? `
                         <button class="btn btn-sm btn-primary" onclick="App.editObject(${row.id})" title="Редактировать">
                             <i class="fas fa-edit"></i>

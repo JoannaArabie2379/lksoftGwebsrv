@@ -753,6 +753,10 @@ const MapManager = {
     showObjectInfo(objectType, properties) {
         // Подсветка выбранного объекта (тень)
         this.highlightSelectedObject(objectType, properties?.id);
+        // Для кабеля дополнительно подсвечиваем линию, как в сценарии "кабели в направлении"
+        if (objectType === 'unified_cable' && properties?.id) {
+            this.highlightCableGeometryFromLayer(properties.id);
+        }
 
         const infoPanel = document.getElementById('object-info-panel');
         const infoTitle = document.getElementById('info-title');
@@ -912,6 +916,41 @@ const MapManager = {
             this.highlightLayer = null;
         }
         this.setHighlightBarVisible(false);
+    },
+
+    highlightCableGeometryFromLayer(cableId) {
+        try {
+            this.clearHighlight();
+            const layer = this.findLayerByMeta('unified_cable', cableId);
+            const latlngs = layer?.getLatLngs?.();
+            if (!latlngs) return;
+            this.highlightLayer = L.polyline(latlngs, { color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }).addTo(this.map);
+            this.setHighlightBarVisible(true);
+            const bounds = this.highlightLayer.getBounds();
+            if (bounds && bounds.isValid()) {
+                this.fitToBounds(bounds, 17);
+            }
+        } catch (e) {
+            console.error('Ошибка подсветки кабеля:', e);
+        }
+    },
+
+    highlightCableGeometryByGeoJson(geometry) {
+        try {
+            this.clearHighlight();
+            if (!geometry) return;
+            this.highlightLayer = L.geoJSON(
+                { type: 'FeatureCollection', features: [{ type: 'Feature', geometry, properties: {} }] },
+                { style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }) }
+            ).addTo(this.map);
+            this.setHighlightBarVisible(true);
+            const bounds = this.highlightLayer.getBounds();
+            if (bounds && bounds.isValid()) {
+                this.fitToBounds(bounds, 17);
+            }
+        } catch (e) {
+            console.error('Ошибка подсветки кабеля (geojson):', e);
+        }
     },
 
     async highlightCableRouteDirections(cableId) {
@@ -1356,6 +1395,7 @@ const MapManager = {
             let response;
             let lat, lng;
             let bounds = null;
+            let cableGeometry = null;
 
             switch (objectType) {
                 case 'wells':
@@ -1440,6 +1480,7 @@ const MapManager = {
                             lat = coords[midIdx][1];
                             const latLngs = coords.map(c => [c[1], c[0]]);
                             bounds = L.latLngBounds(latLngs);
+                            cableGeometry = geom;
                         }
                     }
                     break;
@@ -1458,6 +1499,11 @@ const MapManager = {
                     App.notify('Не удалось определить координаты объекта', 'warning');
                 }
             }, 100);
+
+            // Для кабелей дополнительно делаем подсветку "без фильтров" (поверх слоёв)
+            if (objectType === 'unified_cables' && cableGeometry) {
+                setTimeout(() => this.highlightCableGeometryByGeoJson(cableGeometry), 180);
+            }
 
         } catch (error) {
             console.error('Ошибка показа объекта на карте:', error);
