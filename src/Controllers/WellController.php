@@ -494,12 +494,9 @@ class WellController extends BaseController
             'max_columns' => $maxCols,
             'preview' => $previewRows,
             'fields' => [
-                // основные
                 'number',
-                // координаты (в зависимости от выбранной СК)
-                'longitude', 'latitude', 'x_msk86', 'y_msk86',
-                // опциональные
-                'depth', 'material', 'installation_date', 'notes',
+                'longitude',
+                'latitude',
             ],
         ]);
     }
@@ -516,10 +513,8 @@ class WellController extends BaseController
         $delimiterRaw = (string) $this->request->input('delimiter', ';');
         $delimiter = $this->normalizeCsvDelimiter($delimiterRaw, ';');
         $mapping = $this->request->input('mapping', []);
-        $coordinateSystem = (string) $this->request->input('coordinate_system', 'wgs84');
-        if (!in_array($coordinateSystem, ['wgs84', 'msk86'], true)) {
-            $coordinateSystem = 'wgs84';
-        }
+        // По ТЗ: только WGS84
+        $coordinateSystem = 'wgs84';
 
         if (!is_array($mapping)) {
             Response::error('Некорректное сопоставление колонок', 422);
@@ -529,8 +524,18 @@ class WellController extends BaseController
         $defaultOwnerId = (int) $this->request->input('default_owner_id', 0);
         $defaultKindId = (int) $this->request->input('default_kind_id', 0);
         $defaultStatusId = (int) $this->request->input('default_status_id', 0);
-        $numbers = $this->request->input('numbers', []);
-        if (!is_array($numbers)) $numbers = [];
+        if ($defaultOwnerId <= 0 || $defaultKindId <= 0 || $defaultStatusId <= 0) {
+            Response::error('Необходимо выбрать собственника, тип и состояние', 422);
+        }
+
+        // Разрешённые поля сопоставления колонок
+        $allowedMapFields = ['number', 'longitude', 'latitude'];
+        foreach ($mapping as $k => $v) {
+            if ($v === null || $v === '' || $v === 'ignore') continue;
+            if (!in_array($v, $allowedMapFields, true)) {
+                Response::error('Недопустимое поле сопоставления: ' . (string) $v, 422);
+            }
+        }
 
         // type_id для колодцев определяем по системному коду object_types.code='well'
         $wellTypeRow = $this->db->fetch("SELECT id FROM object_types WHERE code = 'well' LIMIT 1");
@@ -538,6 +543,14 @@ class WellController extends BaseController
         if ($wellTypeId <= 0) {
             Response::error('Не удалось определить вид объекта "well" (object_types)', 500);
         }
+
+        // Код собственника нужен для формирования номера
+        $ownerRow = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => $defaultOwnerId]);
+        $ownerCode = trim((string) ($ownerRow['code'] ?? ''));
+        if ($ownerCode === '') {
+            Response::error('Не удалось определить код собственника', 422);
+        }
+        $numberPrefix = "ККС-{$ownerCode}-";
 
         $lines = preg_split("/\r\n|\n|\r/", $text);
         $lines = array_values(array_filter(array_map('trim', $lines), fn($l) => $l !== ''));
@@ -614,16 +627,12 @@ class WellController extends BaseController
                         $data[$fieldName] = ($val === '' ? null : $val);
                     }
 
-                    // Минимальные обязательные поля
-                    $overrideNumber = null;
-                    if (isset($numbers[(string) $lineNo]) && is_string($numbers[(string) $lineNo])) {
-                        $overrideNumber = trim((string) $numbers[(string) $lineNo]);
+                    // Номер колодца: ККС-<код собственника>-<суффикс из колонки number>
+                    $suffix = trim((string) ($data['number'] ?? ''));
+                    if ($suffix === '') {
+                        throw new \RuntimeException('Не указан суффикс номера (колонка "Номер")');
                     }
-
-                    $number = $overrideNumber !== null ? $overrideNumber : trim((string) ($data['number'] ?? ''));
-                    if ($number === '') {
-                        throw new \RuntimeException('Не указан номер (number)');
-                    }
+                    $number = str_starts_with($suffix, $numberPrefix) ? $suffix : ($numberPrefix . $suffix);
                     $len = function_exists('mb_strlen') ? mb_strlen($number) : strlen($number);
                     if ($len > 50) {
                         throw new \RuntimeException('Номер слишком длинный (max 50)');
@@ -632,37 +641,16 @@ class WellController extends BaseController
                     // Справочники (type_id фиксированный для колодцев)
                     $data['type_id'] = $wellTypeId;
 
-                    // owner/kind/status: либо из колонок, либо из значений по умолчанию (шапка)
-                    $ownerRaw = array_key_exists('owner_id', $data) ? (string) ($data['owner_id'] ?? '') : '';
-                    $kindRaw = array_key_exists('kind_id', $data) ? (string) ($data['kind_id'] ?? '') : '';
-                    $statusRaw = array_key_exists('status_id', $data) ? (string) ($data['status_id'] ?? '') : '';
-
-                    $resolvedOwner = $ownerRaw !== '' ? $resolve('owner_id', $ownerRaw) : ($defaultOwnerId > 0 ? $defaultOwnerId : null);
-                    $resolvedKind = $kindRaw !== '' ? $resolve('kind_id', $kindRaw) : ($defaultKindId > 0 ? $defaultKindId : null);
-                    $resolvedStatus = $statusRaw !== '' ? $resolve('status_id', $statusRaw) : ($defaultStatusId > 0 ? $defaultStatusId : null);
-
-                    if (!$resolvedOwner) throw new \RuntimeException('Не удалось определить owner_id');
-                    if (!$resolvedKind) throw new \RuntimeException('Не удалось определить kind_id');
-                    if (!$resolvedStatus) throw new \RuntimeException('Не удалось определить status_id');
-
-                    $data['owner_id'] = (int) $resolvedOwner;
-                    $data['kind_id'] = (int) $resolvedKind;
-                    $data['status_id'] = (int) $resolvedStatus;
+                    // owner/kind/status только из шапки
+                    $data['owner_id'] = $defaultOwnerId;
+                    $data['kind_id'] = $defaultKindId;
+                    $data['status_id'] = $defaultStatusId;
 
                     // Координаты
                     $lon = $data['longitude'] ?? null;
                     $lat = $data['latitude'] ?? null;
-                    $x = $data['x_msk86'] ?? null;
-                    $y = $data['y_msk86'] ?? null;
-
-                    if ($coordinateSystem === 'wgs84') {
-                        if ($lon === null || $lat === null || !is_numeric($lon) || !is_numeric($lat)) {
-                            throw new \RuntimeException('Не указаны корректные координаты longitude/latitude (WGS84)');
-                        }
-                    } else {
-                        if ($x === null || $y === null || !is_numeric($x) || !is_numeric($y)) {
-                            throw new \RuntimeException('Не указаны корректные координаты x_msk86/y_msk86 (МСК86)');
-                        }
+                    if ($lon === null || $lat === null || !is_numeric($lon) || !is_numeric($lat)) {
+                        throw new \RuntimeException('Не указаны корректные координаты Долгота/Широта (WGS84)');
                     }
 
                     // Опциональные поля
@@ -693,54 +681,25 @@ class WellController extends BaseController
                     $data['number'] = $number;
 
                     // Вставка
-                    if ($coordinateSystem === 'wgs84') {
-                        $sql = "INSERT INTO wells (number, geom_wgs84, owner_id, type_id, kind_id, status_id, depth, material, installation_date, notes, created_by, updated_by)
-                                VALUES (:number, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
-                                        :owner_id, :type_id, :kind_id, :status_id, :depth, :material, :installation_date, :notes, :created_by, :updated_by)
-                                RETURNING id";
-                        $params = [
-                            'number' => $data['number'],
-                            'lon' => (float) $lon,
-                            'lat' => (float) $lat,
-                            'owner_id' => $data['owner_id'],
-                            'type_id' => $wellTypeId,
-                            'kind_id' => $data['kind_id'],
-                            'status_id' => $data['status_id'],
-                            'depth' => $data['depth'] ?? null,
-                            'material' => $data['material'] ?? null,
-                            'installation_date' => $data['installation_date'] ?? null,
-                            'notes' => $data['notes'] ?? null,
-                            'created_by' => $data['created_by'],
-                            'updated_by' => $data['updated_by'],
-                        ];
-                    } else {
-                        $sql = "WITH geom_point AS (
-                                    SELECT ST_SetSRID(ST_MakePoint(:x, :y), 200004) as msk86_point
-                                )
-                                INSERT INTO wells (number, geom_wgs84, geom_msk86, owner_id, type_id, kind_id, status_id, depth, material, installation_date, notes, created_by, updated_by)
-                                SELECT :number,
-                                       ST_Transform(msk86_point, 4326),
-                                       msk86_point,
-                                       :owner_id, :type_id, :kind_id, :status_id,
-                                       :depth, :material, :installation_date, :notes, :created_by, :updated_by
-                                FROM geom_point
-                                RETURNING id";
-                        $params = [
-                            'number' => $data['number'],
-                            'x' => (float) $x,
-                            'y' => (float) $y,
-                            'owner_id' => $data['owner_id'],
-                            'type_id' => $wellTypeId,
-                            'kind_id' => $data['kind_id'],
-                            'status_id' => $data['status_id'],
-                            'depth' => $data['depth'] ?? null,
-                            'material' => $data['material'] ?? null,
-                            'installation_date' => $data['installation_date'] ?? null,
-                            'notes' => $data['notes'] ?? null,
-                            'created_by' => $data['created_by'],
-                            'updated_by' => $data['updated_by'],
-                        ];
-                    }
+                    $sql = "INSERT INTO wells (number, geom_wgs84, owner_id, type_id, kind_id, status_id, depth, material, installation_date, notes, created_by, updated_by)
+                            VALUES (:number, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
+                                    :owner_id, :type_id, :kind_id, :status_id, :depth, :material, :installation_date, :notes, :created_by, :updated_by)
+                            RETURNING id";
+                    $params = [
+                        'number' => $data['number'],
+                        'lon' => (float) $lon,
+                        'lat' => (float) $lat,
+                        'owner_id' => $data['owner_id'],
+                        'type_id' => $wellTypeId,
+                        'kind_id' => $data['kind_id'],
+                        'status_id' => $data['status_id'],
+                        'depth' => $data['depth'] ?? null,
+                        'material' => $data['material'] ?? null,
+                        'installation_date' => $data['installation_date'] ?? null,
+                        'notes' => $data['notes'] ?? null,
+                        'created_by' => $data['created_by'],
+                        'updated_by' => $data['updated_by'],
+                    ];
 
                     $stmt = $this->db->query($sql, $params);
                     $newId = (int) $stmt->fetchColumn();

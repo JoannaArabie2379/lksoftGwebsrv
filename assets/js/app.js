@@ -3600,9 +3600,8 @@ const App = {
                 <div style="display:flex; gap: 10px; flex-wrap: wrap; align-items: end;">
                     <div class="form-group" style="min-width: 220px;">
                         <label>Система координат</label>
-                        <select id="well-import-coord-system">
+                        <select id="well-import-coord-system" disabled>
                             <option value="wgs84" selected>WGS84 (longitude/latitude)</option>
-                            <option value="msk86">МСК86 Зона 4 (x_msk86/y_msk86)</option>
                         </select>
                     </div>
                     <div class="form-group" style="min-width: 220px;">
@@ -3661,18 +3660,13 @@ const App = {
         setTimeout(() => {
             const ta = document.getElementById('well-import-text');
             const del = document.getElementById('well-import-delimiter');
-            const cs = document.getElementById('well-import-coord-system');
             const owner = document.getElementById('well-import-owner');
             const kind = document.getElementById('well-import-kind');
             const status = document.getElementById('well-import-status');
             const handler = () => this.scheduleWellImportPreview();
             ta?.addEventListener('input', handler);
             del?.addEventListener('change', handler);
-            cs?.addEventListener('change', handler);
-            owner?.addEventListener('change', () => {
-                this.updateWellImportNumberPrefixes();
-                handler();
-            });
+            owner?.addEventListener('change', handler);
             kind?.addEventListener('change', handler);
             status?.addEventListener('change', handler);
         }, 0);
@@ -3725,15 +3719,6 @@ const App = {
         }
     },
 
-    updateWellImportNumberPrefixes() {
-        const ownerSelect = document.getElementById('well-import-owner');
-        const ownerCode = ownerSelect?.selectedOptions?.[0]?.dataset?.code || '';
-        const prefix = ownerCode ? `ККС-${ownerCode}-` : 'ККС-';
-        document.querySelectorAll('input[data-well-import-number-prefix="1"]').forEach((el) => {
-            el.value = prefix;
-        });
-    },
-
     /**
      * Debounce предпросмотра
      */
@@ -3769,7 +3754,13 @@ const App = {
             const rows = data.preview || [];
             const maxCols = data.max_columns || 0;
             const total = data.total_lines || 0;
-            const fields = data.fields || [];
+            const fields = ['number', 'latitude', 'longitude'];
+
+            const fieldLabels = {
+                number: 'Номер',
+                latitude: 'Широта',
+                longitude: 'Долгота',
+            };
 
             this._wellImportMaxCols = maxCols;
             this._wellImportFields = fields;
@@ -3785,19 +3776,12 @@ const App = {
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr>
-                                <th style="text-align:left; padding:6px 8px; border-bottom:1px solid var(--border-color);">Номер</th>
                                 ${Array.from({ length: maxCols }).map((_, i) => `<th style="text-align:left; padding:6px 8px; border-bottom:1px solid var(--border-color);">#${i + 1}</th>`).join('')}
                             </tr>
                         </thead>
                         <tbody>
                             ${rows.map((r, idx) => `
                                 <tr>
-                                    <td style="padding:6px 8px; border-bottom:1px solid var(--border-color);">
-                                        <div style="display:flex; gap: 6px; align-items:center;">
-                                            <input type="text" class="well-import-number-prefix" data-well-import-number-prefix="1" id="well-import-number-prefix-${idx}" readonly style="width: 150px; background: var(--bg-tertiary);">
-                                            <input type="text" id="well-import-number-suffix-${idx}" placeholder="Суффикс" style="width: 140px;">
-                                        </div>
-                                    </td>
                                     ${Array.from({ length: maxCols }).map((_, i) => `<td style="padding:6px 8px; border-bottom:1px solid var(--border-color);">${this.escapeHtml(r?.[i] ?? '')}</td>`).join('')}
                                 </tr>
                             `).join('')}
@@ -3805,9 +3789,6 @@ const App = {
                     </table>
                 </div>
             `;
-
-            // выставляем префиксы по выбранному собственнику
-            this.updateWellImportNumberPrefixes();
 
             mappingEl.classList.remove('hidden');
             mappingEl.innerHTML = `
@@ -3821,7 +3802,7 @@ const App = {
                             <div style="min-width: 90px;"><strong>#${i + 1}</strong></div>
                             <select id="well-import-map-${i}" style="flex: 1;">
                                 <option value="ignore">Не использовать</option>
-                                ${fields.map(f => `<option value="${f}">${f}</option>`).join('')}
+                                ${fields.map(f => `<option value="${f}">${fieldLabels[f] || f}</option>`).join('')}
                             </select>
                         </div>
                     `).join('')}
@@ -3851,7 +3832,7 @@ const App = {
     async executeWellTextImport() {
         const text = document.getElementById('well-import-text')?.value || '';
         const delimiter = document.getElementById('well-import-delimiter')?.value || ';';
-        const coordSystem = document.getElementById('well-import-coord-system')?.value || 'wgs84';
+        const coordSystem = 'wgs84';
         const resultEl = document.getElementById('well-import-result');
         const ownerId = document.getElementById('well-import-owner')?.value || '';
         const kindId = document.getElementById('well-import-kind')?.value || '';
@@ -3875,25 +3856,11 @@ const App = {
             return;
         }
 
-        // Собираем номера (по введённым суффиксам) для строк предпросмотра
-        const numbers = {};
-        const maxRows = Math.min(this._wellImportTotalLines || 0, 20); // в предпросмотре показываем до 20
-        for (let i = 0; i < maxRows; i++) {
-            const prefix = document.getElementById(`well-import-number-prefix-${i}`)?.value || '';
-            const suffix = document.getElementById(`well-import-number-suffix-${i}`)?.value || '';
-            const full = (prefix + (suffix || '')).trim();
-            if (suffix && full) {
-                // lineNo = i+1
-                numbers[String(i + 1)] = full;
-            }
-        }
-
         try {
             const resp = await API.wells.importText(text, delimiter, mapping, coordSystem, {
                 default_owner_id: parseInt(ownerId),
                 default_kind_id: parseInt(kindId),
                 default_status_id: parseInt(statusId),
-                numbers,
             });
             if (!resp?.success) {
                 this.notify(resp?.message || 'Ошибка загрузки', 'error');
