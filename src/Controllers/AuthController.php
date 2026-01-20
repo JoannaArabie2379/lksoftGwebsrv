@@ -254,6 +254,10 @@ class AuthController
         if (!$user) {
             Response::error('Пользователь не найден', 404);
         }
+        // root — системный пользователь, удаление запрещено
+        if (($user['login'] ?? '') === 'root') {
+            Response::error('Нельзя удалить системного пользователя root', 400);
+        }
 
         try {
             $this->db->beginTransaction();

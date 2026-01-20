@@ -2328,9 +2328,11 @@ const App = {
                     <button class="btn btn-sm btn-primary" onclick="App.editUser(${user.id})">
                         <i class="fas fa-edit"></i>
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteUser(${user.id})" title="Удалить (деактивировать)">
-                        <i class="fas fa-trash"></i>
-                    </button>
+                    ${user.login === 'root' ? '' : `
+                        <button class="btn btn-sm btn-danger" onclick="App.deleteUser(${user.id})" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    `}
                 </td>
             </tr>
         `).join('');
@@ -2384,9 +2386,11 @@ const App = {
 
             const footer = `
                 <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
-                <button class="btn btn-danger" onclick="App.deleteUser(${user.id})" style="margin-left:auto;">
-                    <i class="fas fa-trash"></i> Удалить
-                </button>
+                ${user.login === 'root' ? '' : `
+                    <button class="btn btn-danger" onclick="App.deleteUser(${user.id})" style="margin-left:auto;">
+                        <i class="fas fa-trash"></i> Удалить
+                    </button>
+                `}
                 <button class="btn btn-primary" onclick="App.submitUserEdit(${user.id})">
                     <i class="fas fa-save"></i> Сохранить
                 </button>
@@ -3710,8 +3714,6 @@ const App = {
             const statusData = statuses?.data || [];
             statusSelect.innerHTML = '<option value="">Выберите...</option>' +
                 statusData.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-
-            this.updateWellImportNumberPrefixes();
         } catch (e) {
             ownerSelect.innerHTML = '<option value="">Ошибка загрузки</option>';
             kindSelect.innerHTML = '<option value="">Ошибка загрузки</option>';
