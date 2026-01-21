@@ -7,6 +7,9 @@ const App = {
     currentPanel: 'map',
     currentTab: 'wells',
     currentReference: null,
+    // Последний выбранный справочник внутри панели "Справочники"
+    // (нужно, чтобы переход в "Контракты" не ломал редактирование справочников)
+    lastReferenceInReferencesPanel: null,
     settings: {},
     pagination: { page: 1, limit: 50, total: 0 },
     incidentDraftRelatedObjects: [],
@@ -490,6 +493,24 @@ const App = {
                 break;
             case 'contracts':
                 this.loadContractsPanel();
+                break;
+            case 'references':
+                // При уходе в "Контракты" currentReference становится 'contracts',
+                // но в панели "Справочники" может быть открыт другой справочник (например "owners").
+                // Восстанавливаем актуальный currentReference, чтобы editReference() не ходил в /contracts/{id}.
+                {
+                    const refContent = document.getElementById('reference-content');
+                    const isContentVisible = refContent && !refContent.classList.contains('hidden');
+                    if (isContentVisible) {
+                        this.currentReference = this.lastReferenceInReferencesPanel || this.currentReference;
+                        const addBtn = document.getElementById('btn-add-ref');
+                        if (addBtn) {
+                            addBtn.classList.toggle('hidden', !this.canManageReferenceType(this.currentReference) || this.currentReference === 'object_types');
+                        }
+                    } else {
+                        this.currentReference = null;
+                    }
+                }
                 break;
             case 'admin':
                 this.loadUsers();
@@ -2700,6 +2721,7 @@ const App = {
      */
     async showReference(type) {
         this.currentReference = type;
+        this.lastReferenceInReferencesPanel = type;
 
         // Справочник display_styles удалён
         if (type === 'display_styles') {
@@ -5076,7 +5098,7 @@ const App = {
             'owners': `
                 <div class="form-group">
                     <label>Код *</label>
-                    <input type="text" name="code" value="${data.code || ''}" required>
+                    <input type="text" name="code" value="${data.code || ''}" required ${data.id ? 'readonly style="background: var(--bg-tertiary);"' : ''}>
                 </div>
                 <div class="form-group">
                     <label>Название *</label>

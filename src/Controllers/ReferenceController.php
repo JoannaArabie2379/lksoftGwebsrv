@@ -328,6 +328,10 @@ class ReferenceController extends BaseController
         if ($type === 'object_types') {
             $data = array_intersect_key($data, array_flip(['name', 'description', 'icon', 'color']));
         }
+        // Для справочника "Собственники" запрещаем редактировать код (используется во всех номерах)
+        if ($type === 'owners') {
+            unset($data['code']);
+        }
         
         // Преобразование булевых значений
         if (array_key_exists('is_default', $data)) {
