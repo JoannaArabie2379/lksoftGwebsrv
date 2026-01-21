@@ -16,12 +16,17 @@ class SettingsController extends BaseController
      */
     public function index(): void
     {
-        $rows = $this->db->fetchAll("SELECT code, value FROM app_settings");
-        $out = [];
-        foreach ($rows as $r) {
-            $out[$r['code']] = $r['value'];
+        try {
+            $rows = $this->db->fetchAll("SELECT code, value FROM app_settings");
+            $out = [];
+            foreach ($rows as $r) {
+                $out[$r['code']] = $r['value'];
+            }
+            Response::success($out);
+        } catch (\PDOException $e) {
+            // Миграция может быть не применена
+            Response::error('Таблица настроек не создана. Примените миграцию database/migration_v6.sql', 500);
         }
-        Response::success($out);
     }
 
     /**
@@ -34,7 +39,8 @@ class SettingsController extends BaseController
             Response::error('Доступ запрещён', 403);
         }
 
-        $data = $this->request->json() ?? [];
+        // JSON body уже распарсен в Request::parseBody() при Content-Type: application/json
+        $data = $this->request->input(null, []);
         if (!is_array($data)) {
             Response::error('Некорректные данные', 422);
         }
@@ -69,6 +75,9 @@ class SettingsController extends BaseController
                 );
             }
             $this->db->commit();
+        } catch (\PDOException $e) {
+            $this->db->rollback();
+            Response::error('Таблица настроек не создана. Примените миграцию database/migration_v6.sql', 500);
         } catch (\Throwable $e) {
             $this->db->rollback();
             throw $e;
