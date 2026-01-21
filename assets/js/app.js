@@ -2689,10 +2689,15 @@ const App = {
                 (canManage ? '<th>Действия</th>' : '');
 
             const fmt = (v) => (v === null || v === undefined || v === '' ? '-' : String(v));
+            const fmtContracts = (col, row) => {
+                if (col === 'owner_id') return fmt(row.owner_name || row.owner_id);
+                if (col === 'landlord_id') return fmt(row.landlord_name || row.landlord_id);
+                return fmt(row[col]);
+            };
 
             body.innerHTML = (data || []).map(row => `
                 <tr>
-                    ${columns.map(c => `<td>${fmt(row[c])}</td>`).join('')}
+                    ${columns.map(c => `<td>${fmtContracts(c, row)}</td>`).join('')}
                     ${canManage ? `
                         <td>
                             <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})" title="Редактировать">
@@ -2811,9 +2816,19 @@ const App = {
         const columns = (columnsByType[type] || rawColumns).filter(col => rawColumns.includes(col));
         const canManage = this.canManageReferenceType(type);
 
-        const formatCell = (col, value) => {
+        const formatCell = (col, value, row) => {
             if (col === 'is_default') return value ? 'Да' : '-';
             if (value === null || value === undefined || value === '') return '-';
+            // FK -> название
+            if (type === 'object_kinds' && col === 'object_type_id') {
+                return row?.object_type_name || String(value);
+            }
+            if (type === 'contracts' && col === 'owner_id') {
+                return row?.owner_name || String(value);
+            }
+            if (type === 'contracts' && col === 'landlord_id') {
+                return row?.landlord_name || String(value);
+            }
             return String(value);
         };
         
@@ -2822,7 +2837,7 @@ const App = {
         
         document.getElementById('ref-table-body').innerHTML = data.map(row => `
             <tr>
-                ${columns.map(col => `<td>${formatCell(col, row[col])}</td>`).join('')}
+                ${columns.map(col => `<td>${formatCell(col, row[col], row)}</td>`).join('')}
                 ${canManage ? `
                     <td>
                         <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">

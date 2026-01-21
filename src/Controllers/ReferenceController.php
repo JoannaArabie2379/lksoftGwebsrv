@@ -26,7 +26,7 @@ class ReferenceController extends BaseController
         'object_kinds' => [
             'table' => 'object_kinds',
             'fields' => ['code', 'name', 'object_type_id', 'description', 'is_default'],
-            'search' => ['code', 'name'],
+            'search' => ['ok.code', 'ok.name'],
         ],
         'object_status' => [
             'table' => 'object_status',
@@ -41,7 +41,7 @@ class ReferenceController extends BaseController
         'contracts' => [
             'table' => 'contracts',
             'fields' => ['number', 'name', 'owner_id', 'landlord_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
-            'search' => ['number', 'name'],
+            'search' => ['c.number', 'c.name'],
         ],
         'cable_types' => [
             'table' => 'cable_types',
@@ -86,14 +86,38 @@ class ReferenceController extends BaseController
         $params = $filters['params'];
 
         // Общее количество
-        $total = $this->getTotal($config['table'], $where, $params);
+        if ($type === 'object_kinds') {
+            $total = $this->getTotal($config['table'], $where, $params, 'ok');
+        } elseif ($type === 'contracts') {
+            $total = $this->getTotal($config['table'], $where, $params, 'c');
+        } else {
+            $total = $this->getTotal($config['table'], $where, $params);
+        }
 
         // Данные
-        $sql = "SELECT * FROM {$config['table']}";
+        if ($type === 'object_kinds') {
+            $sql = "SELECT ok.*, ot.name as object_type_name
+                    FROM object_kinds ok
+                    LEFT JOIN object_types ot ON ok.object_type_id = ot.id";
+        } elseif ($type === 'contracts') {
+            $sql = "SELECT c.*, o.name as owner_name, ol.name as landlord_name
+                    FROM contracts c
+                    LEFT JOIN owners o ON c.owner_id = o.id
+                    LEFT JOIN owners ol ON c.landlord_id = ol.id";
+        } else {
+            $sql = "SELECT * FROM {$config['table']}";
+        }
         if ($where) {
             $sql .= " WHERE {$where}";
         }
-        $sql .= " ORDER BY is_default DESC, id LIMIT :limit OFFSET :offset";
+        if ($type === 'object_kinds') {
+            $sql .= " ORDER BY ok.is_default DESC, ok.id";
+        } elseif ($type === 'contracts') {
+            $sql .= " ORDER BY c.is_default DESC, c.id";
+        } else {
+            $sql .= " ORDER BY is_default DESC, id";
+        }
+        $sql .= " LIMIT :limit OFFSET :offset";
         
         $params['limit'] = $pagination['limit'];
         $params['offset'] = $pagination['offset'];
@@ -110,6 +134,27 @@ class ReferenceController extends BaseController
     public function all(string $type): void
     {
         $config = $this->getConfig($type);
+
+        if ($type === 'object_kinds') {
+            $data = $this->db->fetchAll(
+                "SELECT ok.*, ot.name as object_type_name
+                 FROM object_kinds ok
+                 LEFT JOIN object_types ot ON ok.object_type_id = ot.id
+                 ORDER BY ok.is_default DESC, ok.name"
+            );
+            Response::success($data);
+        }
+
+        if ($type === 'contracts') {
+            $data = $this->db->fetchAll(
+                "SELECT c.*, o.name as owner_name, ol.name as landlord_name
+                 FROM contracts c
+                 LEFT JOIN owners o ON c.owner_id = o.id
+                 LEFT JOIN owners ol ON c.landlord_id = ol.id
+                 ORDER BY c.is_default DESC, c.number"
+            );
+            Response::success($data);
+        }
         
         $sql = "SELECT * FROM {$config['table']} ORDER BY is_default DESC, ";
         
