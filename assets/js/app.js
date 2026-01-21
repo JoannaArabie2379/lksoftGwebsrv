@@ -486,6 +486,12 @@ const App = {
         return this.isAdmin();
     },
 
+    canManageReferenceType(type) {
+        // Контракты: разрешаем создавать/редактировать роли "Пользователь" (при наличии write).
+        if (type === 'contracts') return this.canWrite() || this.isAdmin();
+        return this.canManageReferences();
+    },
+
     /**
      * Установка системы координат
      */
@@ -2555,10 +2561,10 @@ const App = {
             return;
         }
 
-        // Для "Виды объектов" запрещаем добавление новых записей
+        // Управление справочниками: обычно только админ, но "Контракты" можно и роли "Пользователь"
         const addBtn = document.getElementById('btn-add-ref');
         if (addBtn) {
-            addBtn.classList.toggle('hidden', !this.canManageReferences() || type === 'object_types');
+            addBtn.classList.toggle('hidden', !this.canManageReferenceType(type) || type === 'object_types');
         }
         
         document.querySelector('.references-grid').classList.add('hidden');
@@ -2609,7 +2615,7 @@ const App = {
             object_kinds: ['code', 'name', 'object_type_id', 'description', 'is_default'],
             object_status: ['code', 'name', 'color', 'description', 'sort_order', 'is_default'],
             owners: ['code', 'name', 'short_name', 'inn', 'address', 'contact_person', 'contact_phone', 'contact_email', 'notes', 'is_default'],
-            contracts: ['number', 'name', 'owner_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
+            contracts: ['number', 'name', 'owner_id', 'landlord_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
             cable_types: ['code', 'name', 'description', 'is_default'],
             cable_catalog: ['cable_type_id', 'fiber_count', 'marking', 'description', 'is_default'],
         };
@@ -2624,7 +2630,7 @@ const App = {
                 notes: 'Примечания', is_default: 'По умолчанию'
             },
             contracts: {
-                number: 'Номер', name: 'Название', owner_id: 'Собственник',
+                number: 'Номер', name: 'Название', owner_id: 'Арендатор', landlord_id: 'Арендодатель',
                 start_date: 'Дата начала', end_date: 'Дата окончания', status: 'Статус', amount: 'Сумма',
                 notes: 'Примечания', is_default: 'По умолчанию'
             },
@@ -2635,7 +2641,7 @@ const App = {
         const type = this.currentReference || '';
         const rawColumns = Object.keys(data[0]).filter(k => !['id', 'created_at', 'updated_at', 'permissions'].includes(k));
         const columns = (columnsByType[type] || rawColumns).filter(col => rawColumns.includes(col));
-        const canManage = this.canManageReferences();
+        const canManage = this.canManageReferenceType(type);
 
         const formatCell = (col, value) => {
             if (col === 'is_default') return value ? 'Да' : '-';
@@ -4837,8 +4843,12 @@ const App = {
                     <input type="text" name="name" value="${data.name || ''}" required>
                 </div>
                 <div class="form-group">
-                    <label>Собственник</label>
+                    <label>Арендатор</label>
                     <select name="owner_id" id="ref-owner-select" data-value="${data.owner_id || ''}"></select>
+                </div>
+                <div class="form-group">
+                    <label>Арендодатель</label>
+                    <select name="landlord_id" id="ref-landlord-select" data-value="${data.landlord_id || ''}"></select>
                 </div>
                 <div class="form-group">
                     <label>Дата начала</label>
@@ -4956,7 +4966,7 @@ const App = {
             this.showModal('Редактировать запись', content, footer);
 
             // Системные виды объектов не удаляем (скрываем кнопку)
-            if (this.currentReference === 'object_types') {
+        if (this.currentReference === 'object_types' || !this.isAdmin()) {
                 document.getElementById('btn-delete-ref')?.classList.add('hidden');
             }
             
@@ -4965,7 +4975,7 @@ const App = {
             
             // Устанавливаем значения селектов
             setTimeout(() => {
-                const selects = ['ref-object-type-select', 'ref-owner-select', 'ref-cable-type-select'];
+                const selects = ['ref-object-type-select', 'ref-owner-select', 'ref-landlord-select', 'ref-cable-type-select'];
                 selects.forEach(selectId => {
                     const select = document.getElementById(selectId);
                     if (select && select.dataset.value) {
@@ -5001,6 +5011,7 @@ const App = {
             
             // Собственники
             const ownerSelect = document.getElementById('ref-owner-select');
+            const landlordSelect = document.getElementById('ref-landlord-select');
             if (ownerSelect) {
                 const owners = await API.references.all('owners');
                 if (owners.success) {
@@ -5011,6 +5022,19 @@ const App = {
                         ownerSelect.value = ownerSelect.dataset.value;
                     } else if (defaultOwner) {
                         ownerSelect.value = String(defaultOwner.id);
+                    }
+                }
+            }
+            if (landlordSelect) {
+                const owners = await API.references.all('owners');
+                if (owners.success) {
+                    landlordSelect.innerHTML = '<option value="">Не указан</option>' +
+                        owners.data.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+                    const defaultOwner = (owners.data || []).find(o => o.is_default);
+                    if (landlordSelect.dataset.value) {
+                        landlordSelect.value = landlordSelect.dataset.value;
+                    } else if (defaultOwner) {
+                        landlordSelect.value = String(defaultOwner.id);
                     }
                 }
             }

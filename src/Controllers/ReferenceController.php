@@ -40,7 +40,7 @@ class ReferenceController extends BaseController
         ],
         'contracts' => [
             'table' => 'contracts',
-            'fields' => ['number', 'name', 'owner_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
+            'fields' => ['number', 'name', 'owner_id', 'landlord_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
             'search' => ['number', 'name'],
         ],
         'cable_types' => [
@@ -163,7 +163,12 @@ class ReferenceController extends BaseController
      */
     public function store(string $type): void
     {
-        if (!Auth::isAdmin()) {
+        // Для справочника "Контракты" разрешаем создание роли "Пользователь" (при наличии write),
+        // остальные справочники — только администратор.
+        if ($type !== 'contracts' && !Auth::isAdmin()) {
+            Response::error('Доступ запрещён', 403);
+        }
+        if ($type === 'contracts' && !(Auth::isAdmin() || Auth::canWrite())) {
             Response::error('Доступ запрещён', 403);
         }
         $this->checkWriteAccess();
@@ -251,7 +256,12 @@ class ReferenceController extends BaseController
      */
     public function update(string $type, string $id): void
     {
-        if (!Auth::isAdmin()) {
+        // Для справочника "Контракты" разрешаем обновление роли "Пользователь" (при наличии write),
+        // остальные справочники — только администратор.
+        if ($type !== 'contracts' && !Auth::isAdmin()) {
+            Response::error('Доступ запрещён', 403);
+        }
+        if ($type === 'contracts' && !(Auth::isAdmin() || Auth::canWrite())) {
             Response::error('Доступ запрещён', 403);
         }
         $this->checkWriteAccess();

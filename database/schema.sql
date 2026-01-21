@@ -132,7 +132,10 @@ CREATE TABLE IF NOT EXISTS contracts (
     id SERIAL PRIMARY KEY,
     number VARCHAR(100) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
+    -- Арендатор
     owner_id INTEGER REFERENCES owners(id) ON DELETE RESTRICT,
+    -- Арендодатель
+    landlord_id INTEGER REFERENCES owners(id) ON DELETE RESTRICT,
     start_date DATE,
     end_date DATE,
     status VARCHAR(50) DEFAULT 'active',
@@ -144,6 +147,7 @@ CREATE TABLE IF NOT EXISTS contracts (
 );
 
 CREATE INDEX idx_contracts_owner ON contracts(owner_id);
+CREATE INDEX idx_contracts_landlord ON contracts(landlord_id);
 CREATE INDEX idx_contracts_number ON contracts(number);
 
 COMMENT ON TABLE contracts IS 'Контракты на обслуживание';
