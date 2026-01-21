@@ -1715,6 +1715,11 @@ const App = {
                 const select = document.getElementById(selectId);
                 if (select && select.dataset.value) {
                     select.value = select.dataset.value;
+                    // Важно: после установки owner_id нужно пересчитать префикс/номер по актуальному коду собственника
+                    // (иначе остаётся дефолтный код, например "АДМ")
+                    if (selectId === 'modal-owner-select') {
+                        select.dispatchEvent(new Event('change'));
+                    }
                 }
             });
 
