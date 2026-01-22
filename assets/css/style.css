@@ -1189,9 +1189,11 @@ tr:hover {
     
     .map-toolbar {
         top: 5px;
-        left: 10px;
+        left: auto;
+        right: 10px;
         padding: 5px;
-        max-width: calc(100% - 20px);
+        /* оставляем место слева под zoom-кнопки Leaflet */
+        max-width: calc(100% - 90px);
         flex-wrap: wrap;
     }
 
