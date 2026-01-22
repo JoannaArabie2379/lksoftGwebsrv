@@ -479,18 +479,14 @@ const MapManager = {
             let angle = Math.atan2(dy, dx) * 180 / Math.PI;
             if (angle > 90 || angle < -90) angle += 180;
 
-            const nLen = Math.sqrt(dx * dx + dy * dy) || 1;
-            const nx = -dy / nLen;
-            const ny = dx / nLen;
-            const offsetPx = 10;
-            const ox = mx + nx * offsetPx;
-            const oy = my + ny * offsetPx;
-            const pos = this.map.layerPointToLatLng(L.point(ox, oy));
+            // Точка привязки подписи — строго в центре линии
+            const pos = this.map.layerPointToLatLng(L.point(mx, my));
 
             const text = `${Number(lenM).toFixed(2)} м`;
             const icon = L.divIcon({
                 className: 'direction-length-label',
-                html: `<div style="transform: rotate(${angle}deg); transform-origin: center; white-space: nowrap; font-size:${fontSize}px; color:#111; background: rgba(255,255,255,0.85); border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 2px 6px;">${text}</div>`,
+                // Центрируем текст по точке, и уже затем поворачиваем вдоль линии
+                html: `<div style="transform: translate(-50%, -50%) rotate(${angle}deg); transform-origin: center; white-space: nowrap; font-size:${fontSize}px; color:#111; background: rgba(255,255,255,0.85); border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 2px 6px;">${text}</div>`,
                 iconAnchor: [0, 0],
             });
             L.marker(pos, { icon, interactive: false, keyboard: false }).addTo(this.directionLengthLabelsLayer);
