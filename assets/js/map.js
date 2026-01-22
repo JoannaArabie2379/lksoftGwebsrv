@@ -72,7 +72,9 @@ const MapManager = {
     },
 
     isWellEntryPoint(props) {
-        const entry = (window.App?.settings?.well_entry_point_kind_code || '').toString().trim();
+        // Важно: App объявлен как const в app.js и не является window.App,
+        // поэтому используем доступ по идентификатору App (если определён).
+        const entry = (typeof App !== 'undefined' ? (App?.settings?.well_entry_point_kind_code || '') : '').toString().trim();
         if (!entry) return false;
         const kindCode = (props?.kind_code || '').toString().trim();
         return !!kindCode && kindCode === entry;
