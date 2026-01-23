@@ -49,6 +49,7 @@ class UnifiedCableController extends BaseController
                        c.owner_id, o.name as owner_name,
                        c.object_type_id, ot.code as object_type_code, ot.name as object_type_name,
                        c.status_id, os.name as status_name,
+                       (SELECT COUNT(*) FROM object_photos op WHERE op.object_table = 'cables' AND op.object_id = c.id) as photo_count,
                        c.length_calculated, c.length_declared,
                        c.installation_date, c.notes,
                        c.created_at, c.updated_at
@@ -70,6 +71,72 @@ class UnifiedCableController extends BaseController
         $data = $this->db->fetchAll($sql, $params);
 
         Response::paginated($data, $total, $pagination['page'], $pagination['limit']);
+    }
+
+    /**
+     * GET /api/unified-cables/export
+     * Экспорт унифицированных кабелей в CSV (с учётом фильтров и поиска)
+     */
+    public function export(): void
+    {
+        $filters = $this->buildFilters([
+            'owner_id' => 'c.owner_id',
+            'object_type_id' => 'c.object_type_id',
+            'cable_type_id' => 'c.cable_type_id',
+            'status_id' => 'c.status_id',
+            'contract_id' => 'c.contract_id',
+            '_search' => ['c.number', 'c.notes', 'cc.marking'],
+        ]);
+
+        $where = $filters['where'];
+        $params = $filters['params'];
+        $delimiter = $this->normalizeCsvDelimiter($this->request->query('delimiter'), ';');
+
+        $sql = "SELECT c.number,
+                       ot.name as object_type,
+                       ct.name as cable_type,
+                       cc.marking as cable_marking,
+                       cc.fiber_count,
+                       o.name as owner,
+                       con.number as contract_number,
+                       con.name as contract_name,
+                       os.name as status,
+                       c.length_calculated,
+                       c.length_declared,
+                       c.installation_date,
+                       c.notes
+                FROM cables c
+                LEFT JOIN cable_catalog cc ON c.cable_catalog_id = cc.id
+                LEFT JOIN cable_types ct ON c.cable_type_id = ct.id
+                LEFT JOIN owners o ON c.owner_id = o.id
+                LEFT JOIN object_types ot ON c.object_type_id = ot.id
+                LEFT JOIN object_status os ON c.status_id = os.id
+                LEFT JOIN contracts con ON c.contract_id = con.id";
+
+        if ($where) {
+            $sql .= " WHERE {$where}";
+        }
+        $sql .= " ORDER BY c.number";
+
+        $data = $this->db->fetchAll($sql, $params);
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="cables_' . date('Y-m-d') . '.csv"');
+
+        $output = fopen('php://output', 'w');
+        fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+
+        fputcsv($output, [
+            'Номер', 'Вид объекта', 'Тип кабеля', 'Маркировка', 'Волокон',
+            'Собственник', 'Контракт №', 'Контракт', 'Состояние',
+            'Длина расч. (м)', 'Длина заявл. (м)', 'Дата установки', 'Примечания'
+        ], $delimiter);
+
+        foreach ($data as $row) {
+            fputcsv($output, array_values($row), $delimiter);
+        }
+        fclose($output);
+        exit;
     }
 
     /**
@@ -116,6 +183,7 @@ class UnifiedCableController extends BaseController
             'owner_id' => 'c.owner_id',
             'object_type_id' => 'c.object_type_id',
             'status_id' => 'c.status_id',
+            'contract_id' => 'c.contract_id',
         ]);
 
         $where = $filters['where'];
@@ -143,7 +211,7 @@ class UnifiedCableController extends BaseController
                        c.owner_id, o.name as owner_name,
                        ot.code as object_type_code, ot.name as object_type_name, ot.color as object_type_color,
                        ct.name as cable_type_name,
-                       os.name as status_name, os.color as status_color,
+                       os.code as status_code, os.name as status_name, os.color as status_color,
                        cc.fiber_count, cc.marking
                 FROM cables c
                 LEFT JOIN cable_catalog cc ON c.cable_catalog_id = cc.id
@@ -182,7 +250,16 @@ class UnifiedCableController extends BaseController
     {
         $cable = $this->db->fetch(
             "SELECT c.*, 
-                    ST_AsGeoJSON(c.geom_wgs84)::json as geometry,
+                    CASE
+                        WHEN ot.code = 'cable_duct' THEN (
+                            SELECT ST_AsGeoJSON(ST_Collect(cd.geom_wgs84))::json
+                            FROM cable_route_channels crc
+                            JOIN cable_channels cc2 ON crc.cable_channel_id = cc2.id
+                            JOIN channel_directions cd ON cc2.direction_id = cd.id
+                            WHERE crc.cable_id = c.id AND cd.geom_wgs84 IS NOT NULL
+                        )
+                        ELSE ST_AsGeoJSON(c.geom_wgs84)::json
+                    END as geometry,
                     cc.marking as cable_marking, cc.fiber_count,
                     ct.code as cable_type_code, ct.name as cable_type_name,
                     o.name as owner_name,
@@ -272,6 +349,14 @@ class UnifiedCableController extends BaseController
             'number', 'cable_catalog_id', 'cable_type_id', 'owner_id', 'object_type_id',
             'status_id', 'contract_id', 'length_declared', 'installation_date', 'notes'
         ]);
+
+        // Контракт может быть пустым (NULL)
+        if (array_key_exists('contract_id', $data)) {
+            $v = $data['contract_id'];
+            if ($v === '' || $v === '0' || $v === 0) {
+                $data['contract_id'] = null;
+            }
+        }
 
         // number генерируется автоматически после вставки, но параметр нужен для SQL с :number
         if (!array_key_exists('number', $data)) {
@@ -446,7 +531,21 @@ class UnifiedCableController extends BaseController
             'cable_catalog_id', 'cable_type_id', 'owner_id',
             'status_id', 'contract_id', 'length_declared', 'installation_date', 'notes'
         ]);
-        $data = array_filter($data, fn($v) => $v !== null);
+
+        // Контракт может быть очищен до NULL (в UI: "не указан")
+        if (array_key_exists('contract_id', $data)) {
+            $v = $data['contract_id'];
+            if ($v === '' || $v === '0' || $v === 0) {
+                $data['contract_id'] = null;
+            }
+        }
+
+        // Фильтруем null значения, но сохраняем contract_id если он явно передан (чтобы можно было очистить)
+        foreach (array_keys($data) as $k) {
+            if ($data[$k] === null && $k !== 'contract_id') {
+                unset($data[$k]);
+            }
+        }
 
         $user = Auth::user();
         $data['updated_by'] = $user['id'];
@@ -530,6 +629,16 @@ class UnifiedCableController extends BaseController
 
             if (!empty($data)) {
                 $this->db->update('cables', $data, 'id = :id', ['id' => $cableId]);
+            }
+
+            // Если изменён собственник — обновляем номер: КАБ-<код собственника>-<id>
+            if (array_key_exists('owner_id', $data) && (int) $data['owner_id'] !== (int) ($oldCable['owner_id'] ?? 0)) {
+                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
+                $ownerCode = $owner['code'] ?? null;
+                if ($ownerCode) {
+                    $number = "КАБ-{$ownerCode}-{$cableId}";
+                    $this->db->update('cables', ['number' => $number], 'id = :id', ['id' => $cableId]);
+                }
             }
 
             $this->db->commit();

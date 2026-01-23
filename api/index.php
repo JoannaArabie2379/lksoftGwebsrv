@@ -114,6 +114,7 @@ use App\Controllers\GroupController;
 use App\Controllers\ImportController;
 use App\Controllers\PhotoController;
 use App\Controllers\ReportController;
+use App\Controllers\SettingsController;
 
 $router = new Router();
 $request = new Request();
@@ -173,7 +174,10 @@ $router->delete('/api/references/{type}/{id}', [ReferenceController::class, 'des
 // Колодцы
 $router->get('/api/wells', [WellController::class, 'index'], ['auth']);
 $router->get('/api/wells/geojson', [WellController::class, 'geojson'], ['auth']);
+$router->get('/api/wells/exists', [WellController::class, 'existsNumber'], ['auth']);
 $router->get('/api/wells/export', [WellController::class, 'export'], ['auth']);
+$router->post('/api/wells/import-text/preview', [WellController::class, 'importTextPreview'], ['auth']);
+$router->post('/api/wells/import-text', [WellController::class, 'importText'], ['auth']);
 $router->get('/api/wells/{id}', [WellController::class, 'show'], ['auth']);
 $router->post('/api/wells', [WellController::class, 'store'], ['auth']);
 $router->put('/api/wells/{id}', [WellController::class, 'update'], ['auth']);
@@ -182,14 +186,17 @@ $router->delete('/api/wells/{id}', [WellController::class, 'destroy'], ['auth'])
 // Направления каналов
 $router->get('/api/channel-directions', [ChannelController::class, 'index'], ['auth']);
 $router->get('/api/channel-directions/geojson', [ChannelController::class, 'geojson'], ['auth']);
+$router->get('/api/channel-directions/export', [ChannelController::class, 'exportDirections'], ['auth']);
 $router->get('/api/channel-directions/{id}', [ChannelController::class, 'show'], ['auth']);
 $router->post('/api/channel-directions', [ChannelController::class, 'store'], ['auth']);
 $router->put('/api/channel-directions/{id}', [ChannelController::class, 'update'], ['auth']);
 $router->delete('/api/channel-directions/{id}', [ChannelController::class, 'destroy'], ['auth']);
 $router->post('/api/channel-directions/{id}/channels', [ChannelController::class, 'addChannel'], ['auth']);
+$router->post('/api/channel-directions/{id}/channels/ensure', [ChannelController::class, 'ensureChannelCount'], ['auth']);
 
 // Каналы (дочерние объекты направлений)
 $router->get('/api/cable-channels', [ChannelController::class, 'listChannels'], ['auth']);
+$router->get('/api/cable-channels/export', [ChannelController::class, 'exportChannels'], ['auth']);
 $router->get('/api/cable-channels/{id}', [ChannelController::class, 'showChannel'], ['auth']);
 $router->put('/api/cable-channels/{id}', [ChannelController::class, 'updateChannel'], ['auth']);
 $router->delete('/api/cable-channels/{id}', [ChannelController::class, 'deleteChannel'], ['auth']);
@@ -208,6 +215,7 @@ $router->delete('/api/cables/{type}/{id}', [CableController::class, 'destroy'], 
 $router->get('/api/unified-cables/object-types', [UnifiedCableController::class, 'objectTypes'], ['auth']);
 $router->get('/api/unified-cables/geojson', [UnifiedCableController::class, 'geojson'], ['auth']);
 $router->get('/api/unified-cables/stats', [UnifiedCableController::class, 'stats'], ['auth']);
+$router->get('/api/unified-cables/export', [UnifiedCableController::class, 'export'], ['auth']);
 $router->get('/api/unified-cables', [UnifiedCableController::class, 'index'], ['auth']);
 $router->get('/api/unified-cables/by-well/{id}', [UnifiedCableController::class, 'byWell'], ['auth']);
 $router->get('/api/unified-cables/by-direction/{id}', [UnifiedCableController::class, 'byDirection'], ['auth']);
@@ -222,6 +230,7 @@ $router->delete('/api/unified-cables/{id}', [UnifiedCableController::class, 'des
 // Столбики
 $router->get('/api/marker-posts', [MarkerPostController::class, 'index'], ['auth']);
 $router->get('/api/marker-posts/geojson', [MarkerPostController::class, 'geojson'], ['auth']);
+$router->get('/api/marker-posts/export', [MarkerPostController::class, 'export'], ['auth']);
 $router->get('/api/marker-posts/{id}', [MarkerPostController::class, 'show'], ['auth']);
 $router->post('/api/marker-posts', [MarkerPostController::class, 'store'], ['auth']);
 $router->put('/api/marker-posts/{id}', [MarkerPostController::class, 'update'], ['auth']);
@@ -240,6 +249,8 @@ $router->post('/api/incidents/{id}/documents', [IncidentDocumentController::clas
 
 // Группы
 $router->get('/api/groups', [GroupController::class, 'index'], ['auth']);
+$router->get('/api/groups/export', [GroupController::class, 'export'], ['auth']);
+$router->get('/api/groups/by-object', [GroupController::class, 'byObject'], ['auth']);
 $router->get('/api/groups/{id}', [GroupController::class, 'show'], ['auth']);
 $router->get('/api/groups/{id}/geojson', [GroupController::class, 'geojson'], ['auth']);
 $router->post('/api/groups', [GroupController::class, 'store'], ['auth']);
@@ -268,6 +279,10 @@ $router->get('/api/reports/contracts', [ReportController::class, 'contracts'], [
 $router->get('/api/reports/owners', [ReportController::class, 'owners'], ['auth']);
 $router->get('/api/reports/incidents', [ReportController::class, 'incidents'], ['auth']);
 $router->get('/api/reports/export/{type}', [ReportController::class, 'export'], ['auth']);
+
+// Настройки (системные)
+$router->get('/api/settings', [SettingsController::class, 'index'], ['auth']);
+$router->put('/api/settings', [SettingsController::class, 'update'], ['auth']);
 
 // Запуск маршрутизации
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);

@@ -73,6 +73,17 @@ abstract class BaseController
         return compact('page', 'limit', 'offset');
     }
 
+    protected function getAppSetting(string $code, $default = null)
+    {
+        try {
+            $row = $this->db->fetch("SELECT value FROM app_settings WHERE code = :c", ['c' => $code]);
+            if (!$row) return $default;
+            return $row['value'];
+        } catch (\Throwable $e) {
+            return $default;
+        }
+    }
+
     /**
      * Получить общее количество записей
      * @param string $table Имя таблицы
@@ -236,5 +247,26 @@ abstract class BaseController
     {
         $coords = array_map(fn($p) => "{$p[0]} {$p[1]}", $points);
         return "ST_SetSRID(ST_GeomFromText('LINESTRING(" . implode(', ', $coords) . ")'), {$srid})";
+    }
+
+    /**
+     * Нормализация разделителя CSV из query-параметра.
+     * Поддержка: ; , tab \t |
+     */
+    protected function normalizeCsvDelimiter(?string $value, string $default = ';'): string
+    {
+        $v = trim((string) ($value ?? ''));
+        if ($v === '') {
+            return $default;
+        }
+
+        $lower = function_exists('mb_strtolower') ? mb_strtolower($v) : strtolower($v);
+        return match ($lower) {
+            ';', 'semicolon', 'точка-с-запятой', 'точка с запятой' => ';',
+            ',', 'comma', 'запятая' => ',',
+            '|', 'pipe', 'вертикальная черта' => '|',
+            '\t', 'tab', 'таб', 'табуляция' => "\t",
+            default => ((function_exists('mb_strlen') ? mb_strlen($v) : strlen($v)) === 1 ? $v : $default),
+        };
     }
 }

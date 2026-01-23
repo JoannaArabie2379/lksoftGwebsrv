@@ -93,6 +93,68 @@ const API = {
     },
 
     /**
+     * Скачать файл (blob) с авторизацией Bearer
+     */
+    async download(endpoint, params = {}, suggestedFilename = null) {
+        const query = new URLSearchParams(params).toString();
+        const url = this.baseUrl + endpoint + (query ? `?${query}` : '');
+
+        const headers = {};
+        const token = this.getToken();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response = await fetch(url, { method: 'GET', headers });
+        const contentType = response.headers.get('content-type') || '';
+
+        // Ошибка: обычно JSON
+        if (!response.ok) {
+            let message = `Ошибка запроса (${response.status})`;
+            if (contentType.includes('application/json')) {
+                try {
+                    const data = await response.json();
+                    message = data?.message || message;
+                } catch (_) {}
+            }
+            if (response.status === 401) {
+                this.clearToken();
+                window.location.reload();
+            }
+            throw new Error(message);
+        }
+
+        // Сервер мог вернуть JSON с success=false (например, при ошибке)
+        if (contentType.includes('application/json')) {
+            const data = await response.json();
+            throw new Error(data?.message || 'Ошибка выгрузки');
+        }
+
+        const blob = await response.blob();
+
+        // filename из Content-Disposition
+        let filename = suggestedFilename || 'export.csv';
+        const cd = response.headers.get('content-disposition') || '';
+        const match = cd.match(/filename\*?=(?:UTF-8''|")?([^\";]+)"?/i);
+        if (match && match[1]) {
+            try {
+                filename = decodeURIComponent(match[1].trim());
+            } catch (_) {
+                filename = match[1].trim();
+            }
+        }
+
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(blobUrl);
+    },
+
+    /**
      * GET запрос
      */
     get(endpoint, params = {}) {
@@ -248,6 +310,22 @@ const API = {
         delete(id) {
             return API.delete(`/wells/${id}`);
         },
+
+        existsNumber(number, exclude_id = null) {
+            const params = { number };
+            if (exclude_id !== null && exclude_id !== undefined && exclude_id !== '') {
+                params.exclude_id = exclude_id;
+            }
+            return API.get('/wells/exists', params);
+        },
+
+        importTextPreview(text, delimiter = ';') {
+            return API.post('/wells/import-text/preview', { text, delimiter });
+        },
+
+        importText(text, delimiter, mapping, coordinate_system = 'wgs84', options = {}) {
+            return API.post('/wells/import-text', { text, delimiter, mapping, coordinate_system, ...options });
+        },
     },
 
     // ========================
@@ -281,6 +359,10 @@ const API = {
 
         addChannel(directionId, data) {
             return API.post(`/channel-directions/${directionId}/channels`, data);
+        },
+
+        ensureChannelCount(directionId, targetCount) {
+            return API.post(`/channel-directions/${directionId}/channels/ensure`, { target_count: targetCount });
         },
     },
 
@@ -482,6 +564,10 @@ const API = {
             return API.get('/groups', params);
         },
 
+        byObject(type, objectId) {
+            return API.get('/groups/by-object', { type, object_id: objectId });
+        },
+
         get(id) {
             return API.get(`/groups/${id}`);
         },
@@ -602,8 +688,20 @@ const API = {
             return API.get('/reports/incidents', params);
         },
 
-        export(type) {
-            window.open(`${API.baseUrl}/reports/export/${type}?token=${API.getToken()}`, '_blank');
+        export(type, params = {}, delimiter = ';') {
+            return API.download(`/reports/export/${type}`, { ...params, delimiter });
         },
+    },
+
+    // ========================
+    // Настройки
+    // ========================
+    settings: {
+        get() {
+            return API.get('/settings');
+        },
+        update(data) {
+            return API.put('/settings', data);
+        }
     },
 };

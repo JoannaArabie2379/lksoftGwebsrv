@@ -7,8 +7,14 @@ const App = {
     currentPanel: 'map',
     currentTab: 'wells',
     currentReference: null,
+    // Последний выбранный справочник внутри панели "Справочники"
+    // (нужно, чтобы переход в "Контракты" не ломал редактирование справочников)
+    lastReferenceInReferencesPanel: null,
+    settings: {},
     pagination: { page: 1, limit: 50, total: 0 },
     incidentDraftRelatedObjects: [],
+    selectedObjectIds: new Set(),
+    _contractsPanelLoaded: false,
 
     /**
      * Инициализация приложения
@@ -61,6 +67,32 @@ const App = {
             document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
         }
 
+        // Управление справочниками (создание/редактирование/удаление) — только администратор
+        if (!this.canManageReferences()) {
+            document.getElementById('btn-add-ref')?.classList.add('hidden');
+        }
+
+        // Ограничения на запись/удаление (роль "только чтение" и т.п.)
+        if (!this.canWrite()) {
+            document.getElementById('btn-add-object')?.classList.add('hidden');
+            document.getElementById('btn-add-incident')?.classList.add('hidden');
+            document.getElementById('btn-import')?.classList.add('hidden');
+            document.getElementById('btn-edit-object')?.classList.add('hidden');
+
+            // Инструменты добавления на карте тоже прячем
+            ['btn-add-direction-map', 'btn-add-well-map', 'btn-add-marker-map', 'btn-add-ground-cable-map', 'btn-add-aerial-cable-map', 'btn-add-duct-cable-map']
+                .forEach(id => document.getElementById(id)?.classList.add('hidden'));
+        }
+        if (!this.canDelete()) {
+            document.getElementById('btn-delete-object')?.classList.add('hidden');
+        }
+
+        // Кнопка "Загрузить" доступна только для колодцев + права на запись
+        document.getElementById('btn-import')?.classList.toggle('hidden', this.currentTab !== 'wells' || !this.canWrite());
+
+        // Подгружаем настройки до инициализации карты (центр/зум/ссылки)
+        await this.loadSettings().catch(() => {});
+
         // Инициализируем карту
         MapManager.init();
 
@@ -82,6 +114,31 @@ const App = {
         }
     },
 
+    async loadSettings() {
+        try {
+            const resp = await API.settings.get();
+            if (resp?.success === false) return;
+            this.settings = resp?.data || resp || {};
+        } catch (e) {
+            this.settings = {};
+        }
+
+        // Применяем на MapManager дефолтные центр/зум
+        const z = parseInt(this.settings.map_default_zoom, 10);
+        const lat = parseFloat(this.settings.map_default_lat);
+        const lng = parseFloat(this.settings.map_default_lng);
+        if (Number.isFinite(z)) MapManager.defaultZoom = z;
+        if (Number.isFinite(lat) && Number.isFinite(lng)) MapManager.defaultCenter = [lat, lng];
+
+        // Применяем ссылки в сайдбаре
+        const g = (this.settings.url_geoproj || '').toString().trim();
+        const c = (this.settings.url_cadastre || '').toString().trim();
+        const linkGeo = document.getElementById('link-geoproj');
+        const linkCad = document.getElementById('link-cadastre');
+        if (linkGeo && g) linkGeo.href = g;
+        if (linkCad && c) linkCad.href = c;
+    },
+
     /**
      * Привязка событий
      */
@@ -93,17 +150,47 @@ const App = {
         document.getElementById('btn-logout').addEventListener('click', () => this.handleLogout());
 
         // Навигация
+        const closeMobileSidebar = () => {
+            const sidebar = document.querySelector('.sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            if (sidebar) sidebar.classList.remove('open');
+            if (overlay) overlay.classList.add('hidden');
+        };
         document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', () => this.switchPanel(item.dataset.panel));
+            item.addEventListener('click', () => {
+                this.switchPanel(item.dataset.panel);
+                closeMobileSidebar();
+            });
         });
+
+        // Мобильное меню (сайдбар)
+        const mobileMenuBtn = document.getElementById('btn-mobile-menu');
+        const sidebar = document.querySelector('.sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        if (mobileMenuBtn && sidebar && overlay) {
+            const open = () => {
+                sidebar.classList.add('open');
+                overlay.classList.remove('hidden');
+            };
+            const close = () => closeMobileSidebar();
+            mobileMenuBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const isOpen = sidebar.classList.contains('open');
+                if (isOpen) close();
+                else open();
+            });
+            overlay.addEventListener('click', () => close());
+            window.addEventListener('resize', () => {
+                if (window.innerWidth > 768) close();
+            });
+        }
 
         // Переключение темы
         document.getElementById('btn-theme-dark').addEventListener('click', () => this.setTheme('dark'));
         document.getElementById('btn-theme-grey').addEventListener('click', () => this.setTheme('grey'));
 
-        // Переключение системы координат
+        // Система координат: только WGS84
         document.getElementById('btn-wgs84').addEventListener('click', () => this.setCoordinateSystem('wgs84'));
-        document.getElementById('btn-msk86').addEventListener('click', () => this.setCoordinateSystem('msk86'));
 
         // Слои карты
         document.querySelectorAll('.layer-item input').forEach(input => {
@@ -127,6 +214,39 @@ const App = {
         // Поиск объектов
         document.getElementById('search-objects').addEventListener('input', (e) => this.handleSearch(e.target.value));
 
+        // Множественный выбор объектов (делегирование событий)
+        document.getElementById('objects-table')?.addEventListener('change', (e) => {
+            const target = e.target;
+            if (!(target instanceof HTMLInputElement)) return;
+
+            if (target.id === 'select-all-objects') {
+                const checked = target.checked;
+                document.querySelectorAll('#table-body input.obj-select[type="checkbox"]').forEach((cb) => {
+                    cb.checked = checked;
+                    const id = cb.dataset.id;
+                    if (!id) return;
+                    if (checked) this.selectedObjectIds.add(id);
+                    else this.selectedObjectIds.delete(id);
+                });
+                this.updateBulkDeleteButton();
+                return;
+            }
+
+            if (target.classList.contains('obj-select')) {
+                const id = target.dataset.id;
+                if (!id) return;
+                if (target.checked) this.selectedObjectIds.add(id);
+                else this.selectedObjectIds.delete(id);
+
+                const all = Array.from(document.querySelectorAll('#table-body input.obj-select[type="checkbox"]'));
+                const allChecked = all.length > 0 && all.every(cb => cb.checked);
+                const selectAll = document.getElementById('select-all-objects');
+                if (selectAll) selectAll.checked = allChecked;
+
+                this.updateBulkDeleteButton();
+            }
+        });
+
         // Фильтры для кабелей в списке объектов
         document.getElementById('cables-filter-object-type')?.addEventListener('change', () => {
             this.pagination.page = 1;
@@ -145,6 +265,7 @@ const App = {
         document.getElementById('btn-add-object').addEventListener('click', () => this.showAddObjectModal(this.currentTab));
         document.getElementById('btn-import').addEventListener('click', () => this.showImportModal());
         document.getElementById('btn-export').addEventListener('click', () => this.exportObjects());
+        document.getElementById('btn-delete-selected')?.addEventListener('click', () => this.deleteSelectedObjects());
 
         // Инциденты
         document.getElementById('btn-add-incident').addEventListener('click', () => this.showAddIncidentModal());
@@ -162,8 +283,17 @@ const App = {
         document.getElementById('btn-back-refs').addEventListener('click', () => this.hideReference());
         document.getElementById('btn-add-ref').addEventListener('click', () => this.showAddReferenceModal());
 
+        // Контракты (отдельная панель)
+        document.getElementById('btn-add-contract')?.addEventListener('click', () => this.showAddContractModal());
+
         // Админка
         document.getElementById('btn-add-user').addEventListener('click', () => this.showAddUserModal());
+
+        // Настройки
+        document.getElementById('btn-save-settings')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.saveSettings();
+        });
 
         // Модальное окно
         document.getElementById('btn-close-modal').addEventListener('click', () => this.hideModal());
@@ -176,15 +306,88 @@ const App = {
         // Отмена подсветки маршрута кабеля
         document.getElementById('btn-clear-highlight')?.addEventListener('click', () => MapManager.clearHighlight());
 
+        // Esc = отменить подсветку / отменить режимы добавления (аналогично кнопкам "Отменить ...")
+        if (!this._boundEscHighlight) {
+            this._boundEscHighlight = true;
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+
+                // 1) Отмена подсветки кабеля
+                const bar = document.getElementById('highlight-bar');
+                const visibleHighlight = bar && !bar.classList.contains('hidden');
+                try {
+                    if (visibleHighlight) {
+                        MapManager.clearHighlight();
+                    }
+                } catch (_) {}
+
+                // 2) Отмена режимов добавления: направление / кабели (грунт/воздух/канализация)
+                try {
+                    const mm = (typeof MapManager !== 'undefined') ? MapManager : null;
+                    if (!mm) return;
+                    const anyAdd =
+                        !!mm.addDirectionMode ||
+                        !!mm.addCableMode ||
+                        !!mm.addDuctCableMode;
+                    if (!anyAdd) return;
+                    mm.cancelAddDirectionMode?.();
+                    mm.cancelAddCableMode?.();
+                    mm.cancelAddDuctCableMode?.();
+                } catch (_) {}
+            });
+        }
+
+        // Alt + hotkey из "Настройки" = запуск инструмента панели карты
+        if (!this._boundAltHotkeys) {
+            this._boundAltHotkeys = true;
+            document.addEventListener('keydown', (e) => {
+                try {
+                    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+                    const key = (e.key || '').toString();
+                    if (!key || key.length !== 1) return;
+
+                    // Не перехватываем ввод в полях
+                    const t = e.target;
+                    const tag = (t?.tagName || '').toUpperCase();
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+
+                    const k = key.toLowerCase();
+                    const s = this.settings || {};
+                    const map = {
+                        [String(s.hotkey_add_direction || '').toLowerCase()]: 'btn-add-direction-map',
+                        [String(s.hotkey_add_well || '').toLowerCase()]: 'btn-add-well-map',
+                        [String(s.hotkey_add_marker || '').toLowerCase()]: 'btn-add-marker-map',
+                        [String(s.hotkey_add_duct_cable || '').toLowerCase()]: 'btn-add-duct-cable-map',
+                        [String(s.hotkey_add_ground_cable || '').toLowerCase()]: 'btn-add-ground-cable-map',
+                        [String(s.hotkey_add_aerial_cable || '').toLowerCase()]: 'btn-add-aerial-cable-map',
+                    };
+                    const btnId = map[k];
+                    if (!btnId || k === '') return;
+                    const btn = document.getElementById(btnId);
+                    if (!btn) return;
+
+                    e.preventDefault();
+                    btn.click();
+                } catch (_) {
+                    // ignore
+                }
+            });
+        }
+
         // Панель инструментов карты
         document.getElementById('btn-add-direction-map')?.addEventListener('click', () => MapManager.startAddDirectionMode());
         document.getElementById('btn-add-well-map')?.addEventListener('click', () => MapManager.startAddingObject('wells'));
+        document.getElementById('btn-add-marker-map')?.addEventListener('click', () => MapManager.startAddingObject('markers'));
         document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
         document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
         document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => MapManager.startAddDuctCableMode());
         document.getElementById('btn-toggle-well-labels')?.addEventListener('click', (e) => {
             MapManager.toggleWellLabels();
             e.currentTarget.classList.toggle('active', MapManager.wellLabelsEnabled);
+        });
+        document.getElementById('btn-toggle-direction-length-labels')?.addEventListener('click', (e) => {
+            MapManager.toggleDirectionLengthLabels();
+            e.currentTarget.classList.toggle('active', MapManager.directionLengthLabelsEnabled);
         });
         document.getElementById('btn-cancel-add-mode')?.addEventListener('click', () => {
             MapManager.cancelAddDirectionMode();
@@ -267,12 +470,28 @@ const App = {
             const icon = input?.closest('label')?.querySelector('.layer-icon');
             if (icon && color) icon.style.background = color;
         };
+        const setLayerName = (checkboxId, name) => {
+            const input = document.getElementById(checkboxId);
+            const label = input?.closest('label');
+            if (!label || !name) return;
+            const spans = label.querySelectorAll('span');
+            const textSpan = spans?.[spans.length - 1];
+            if (textSpan) textSpan.textContent = name;
+        };
         setLayerIcon('layer-wells', codeToColor.well);
         setLayerIcon('layer-channels', codeToColor.channel);
         setLayerIcon('layer-markers', codeToColor.marker);
         setLayerIcon('layer-ground-cables', codeToColor.cable_ground);
         setLayerIcon('layer-aerial-cables', codeToColor.cable_aerial);
         setLayerIcon('layer-duct-cables', codeToColor.cable_duct);
+
+        // Обновляем названия слоёв из справочника "Виды объектов"
+        setLayerName('layer-wells', byCode.well?.name);
+        setLayerName('layer-channels', byCode.channel?.name);
+        setLayerName('layer-markers', byCode.marker?.name);
+        setLayerName('layer-ground-cables', byCode.cable_ground?.name);
+        setLayerName('layer-aerial-cables', byCode.cable_aerial?.name);
+        setLayerName('layer-duct-cables', byCode.cable_duct?.name);
 
         if (redrawMap && MapManager?.map) {
             MapManager.loadAllLayers();
@@ -344,8 +563,32 @@ const App = {
             case 'incidents':
                 this.loadIncidents();
                 break;
+            case 'contracts':
+                this.loadContractsPanel();
+                break;
+            case 'references':
+                // При уходе в "Контракты" currentReference становится 'contracts',
+                // но в панели "Справочники" может быть открыт другой справочник (например "owners").
+                // Восстанавливаем актуальный currentReference, чтобы editReference() не ходил в /contracts/{id}.
+                {
+                    const refContent = document.getElementById('reference-content');
+                    const isContentVisible = refContent && !refContent.classList.contains('hidden');
+                    if (isContentVisible) {
+                        this.currentReference = this.lastReferenceInReferencesPanel || this.currentReference;
+                        const addBtn = document.getElementById('btn-add-ref');
+                        if (addBtn) {
+                            addBtn.classList.toggle('hidden', !this.canManageReferenceType(this.currentReference) || this.currentReference === 'object_types');
+                        }
+                    } else {
+                        this.currentReference = null;
+                    }
+                }
+                break;
             case 'admin':
                 this.loadUsers();
+                break;
+            case 'settings':
+                this.loadSettingsPanel();
                 break;
         }
     },
@@ -360,13 +603,43 @@ const App = {
         localStorage.setItem('igs_theme', theme);
     },
 
+    isAdmin() {
+        return this.user?.role?.code === 'admin';
+    },
+
+    isRoot() {
+        return this.user?.login === 'root';
+    },
+
+    hasPermission(key) {
+        const p = this.user?.permissions || {};
+        return p?.all === true || p?.[key] === true;
+    },
+
+    canWrite() {
+        return this.hasPermission('write');
+    },
+
+    canDelete() {
+        return this.hasPermission('delete');
+    },
+
+    canManageReferences() {
+        return this.isAdmin();
+    },
+
+    canManageReferenceType(type) {
+        // Контракты: разрешаем создавать/редактировать роли "Пользователь" (при наличии write).
+        if (type === 'contracts') return this.canWrite() || this.isAdmin();
+        return this.canManageReferences();
+    },
+
     /**
      * Установка системы координат
      */
     setCoordinateSystem(system) {
         MapManager.setCoordinateSystem(system);
         document.getElementById('btn-wgs84').classList.toggle('active', system === 'wgs84');
-        document.getElementById('btn-msk86').classList.toggle('active', system === 'msk86');
     },
 
     /**
@@ -448,6 +721,29 @@ const App = {
         if (ownerId) filters.owner_id = ownerId;
         if (statusId) filters.status_id = statusId;
         if (contractId) filters.contract_id = contractId;
+
+        // При выборе контракта:
+        // - показываем все колодцы
+        // - показываем только кабели выбранного контракта
+        // - НЕ показываем направления и столбики
+        if (contractId) {
+            const setLayer = (checkboxId, layerName) => {
+                const cb = document.getElementById(checkboxId);
+                if (cb) cb.checked = true;
+                MapManager.toggleLayer(layerName, true);
+            };
+            const unsetLayer = (checkboxId, layerName) => {
+                const cb = document.getElementById(checkboxId);
+                if (cb) cb.checked = false;
+                MapManager.toggleLayer(layerName, false);
+            };
+            setLayer('layer-wells', 'wells');
+            setLayer('layer-ground-cables', 'groundCables');
+            setLayer('layer-aerial-cables', 'aerialCables');
+            setLayer('layer-duct-cables', 'ductCables');
+            unsetLayer('layer-channels', 'channels');
+            unsetLayer('layer-markers', 'markers');
+        }
         
         // Если выбрана группа - загружаем объекты группы с учётом фильтров
         if (groupId) {
@@ -469,7 +765,22 @@ const App = {
         document.getElementById('filter-owner').value = '';
         document.getElementById('filter-status').value = '';
         document.getElementById('filter-contract').value = '';
-        
+
+        // Слои по умолчанию:
+        // активные: Колодцы, Направления каналов, Столбики
+        // неактивные: Кабели в грунте, Воздушные кабели, Кабели в канализации
+        const setLayer = (checkboxId, layerName, checked) => {
+            const cb = document.getElementById(checkboxId);
+            if (cb) cb.checked = checked;
+            MapManager.toggleLayer(layerName, checked);
+        };
+        setLayer('layer-wells', 'wells', true);
+        setLayer('layer-channels', 'channels', true);
+        setLayer('layer-markers', 'markers', true);
+        setLayer('layer-ground-cables', 'groundCables', false);
+        setLayer('layer-aerial-cables', 'aerialCables', false);
+        setLayer('layer-duct-cables', 'ductCables', false);
+
         MapManager.clearFilters();
         this.notify('Фильтры сброшены', 'info');
     },
@@ -480,6 +791,8 @@ const App = {
     switchTab(tab) {
         this.currentTab = tab;
         this.pagination.page = 1;
+        this.selectedObjectIds.clear();
+        this.updateBulkDeleteButton();
 
         document.querySelectorAll('.tab').forEach(t => {
             t.classList.toggle('active', t.dataset.tab === tab);
@@ -492,6 +805,12 @@ const App = {
             if (tab === 'unified_cables') {
                 this.loadCableListFilters();
             }
+        }
+
+        // Кнопка "Загрузить" доступна только для вкладки "Колодцы"
+        const importBtn = document.getElementById('btn-import');
+        if (importBtn) {
+            importBtn.classList.toggle('hidden', tab !== 'wells' || !this.canWrite());
         }
 
         this.loadObjects();
@@ -660,23 +979,228 @@ const App = {
             cable_marking: 'Маркировка',
         };
 
+        // Сбрасываем выбор при перерисовке списка
+        this.selectedObjectIds.clear();
+        this.updateBulkDeleteButton();
+
+        const canBulkDelete = this.canDelete();
+
         // Заголовок
-        header.innerHTML = columns.map(col => `<th>${columnNames[col] || col}</th>`).join('') + '<th>Действия</th>';
+        header.innerHTML =
+            (canBulkDelete ? `<th style="width: 34px;"><input type="checkbox" id="select-all-objects"></th>` : '') +
+            columns.map(col => `<th>${columnNames[col] || col}</th>`).join('') +
+            '<th>Действия</th>';
 
         // Тело таблицы
         body.innerHTML = data.map(row => `
             <tr data-id="${row.id}">
+                ${canBulkDelete ? `<td><input type="checkbox" class="obj-select" data-id="${row.id}"></td>` : ''}
                 ${columns.map(col => `<td>${row[col] || '-'}</td>`).join('')}
                 <td>
-                    <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                    <button class="btn btn-sm btn-primary" onclick="App.editObject(${row.id})" title="Редактировать">
-                        <i class="fas fa-edit"></i>
-                    </button>
+                    ${Number(row.photo_count || 0) > 0 ? `
+                        <button class="btn btn-sm btn-secondary" onclick="App.showAttachedPhotos(${row.id})" title="Посмотреть прикреплённые фото">
+                            <i class="fas fa-images"></i>
+                        </button>
+                    ` : ''}
+                    ${this.currentTab === 'channels' ? '' : `
+                        <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    `}
+                    ${this.canWrite() ? `
+                        <button class="btn btn-sm btn-primary" onclick="App.editObject(${row.id})" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                    ` : ''}
+                    ${this.canDelete() ? `
+                        ${this.currentTab === 'channels' ? `
+                            ${(Number(row.channel_number || 0) === Number(row.max_channel_number || -1)) ? `
+                                <button class="btn btn-sm btn-danger" onclick="App.deleteObject('${this.currentTab}', ${row.id})" title="Удалить">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            ` : ``}
+                        ` : `
+                            <button class="btn btn-sm btn-danger" onclick="App.deleteObject('${this.currentTab}', ${row.id})" title="Удалить">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        `}
+                    ` : ''}
                 </td>
             </tr>
         `).join('');
+    },
+
+    updateBulkDeleteButton() {
+        const btn = document.getElementById('btn-delete-selected');
+        if (!btn) return;
+        const count = this.selectedObjectIds?.size || 0;
+        const can = this.canDelete();
+        btn.classList.toggle('hidden', !can || count === 0);
+        btn.innerHTML = `<i class="fas fa-trash"></i> Удалить выбранные${count ? ` (${count})` : ''}`;
+    },
+
+    async deleteSelectedObjects() {
+        if (!this.canDelete()) {
+            this.notify('Недостаточно прав для удаления', 'error');
+            return;
+        }
+        let ids = Array.from(this.selectedObjectIds || []);
+        if (!ids.length) return;
+
+        if (!confirm(`Удалить выбранные записи (${ids.length})?`)) return;
+
+        const results = { ok: 0, failed: 0, errors: [] };
+
+        // Для "Каналы" удаляем строго с последнего в каждом направлении
+        if (this.currentTab === 'channels') {
+            try {
+                const details = [];
+                for (const id of ids) {
+                    const resp = await API.cableChannels.get(id);
+                    const ch = resp?.data || resp;
+                    if (ch && ch.id) details.push(ch);
+                }
+                // Группируем по направлению и сортируем по номеру канала DESC
+                details.sort((a, b) => {
+                    const da = Number(a.direction_id || 0);
+                    const db = Number(b.direction_id || 0);
+                    if (da !== db) return da - db;
+                    return Number(b.channel_number || 0) - Number(a.channel_number || 0);
+                });
+                ids = details.map(d => d.id);
+            } catch (_) {
+                // если не удалось получить детали — оставим исходный порядок
+            }
+        }
+
+        for (const id of ids) {
+            try {
+                await this.deleteObjectByTab(id);
+                results.ok += 1;
+            } catch (e) {
+                results.failed += 1;
+                results.errors.push({ id, message: e?.message || 'Ошибка' });
+            }
+        }
+
+        this.selectedObjectIds.clear();
+        this.updateBulkDeleteButton();
+
+        if (results.failed) {
+            this.notify(`Удалено: ${results.ok}, ошибок: ${results.failed}`, 'warning');
+            console.error('Bulk delete errors:', results.errors);
+        } else {
+            this.notify(`Удалено: ${results.ok}`, 'success');
+        }
+
+        this.loadObjects();
+        try { MapManager.loadAllLayers(); } catch (_) {}
+    },
+
+    deleteObjectByTab(id) {
+        switch (this.currentTab) {
+            case 'wells':
+                return API.wells.delete(id);
+            case 'directions':
+                return API.channelDirections.delete(id);
+            case 'channels':
+                return API.cableChannels.delete(id);
+            case 'markers':
+                return API.markerPosts.delete(id);
+            case 'unified_cables':
+                return API.unifiedCables.delete(id);
+            case 'groups':
+                return API.groups.delete(id);
+            default:
+                return Promise.reject(new Error('Неизвестный тип объекта'));
+        }
+    },
+
+    getPhotosObjectTable(tab) {
+        const map = {
+            wells: 'wells',
+            directions: 'channel_directions',
+            channels: 'cable_channels',
+            markers: 'marker_posts',
+            unified_cables: 'cables',
+        };
+        return map[tab] || null;
+    },
+
+    async showAttachedPhotos(objectId) {
+        const table = this.getPhotosObjectTable(this.currentTab);
+        if (!table) {
+            this.notify('Для этого типа объектов фотографии недоступны', 'warning');
+            return;
+        }
+        try {
+            const resp = await API.photos.byObject(table, objectId);
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка загрузки фото', 'error');
+                return;
+            }
+            const photos = resp.data || [];
+            if (!photos.length) {
+                this.notify('Фотографии не найдены', 'info');
+                return;
+            }
+            this._photoGallery = {
+                table,
+                objectId,
+                photos,
+                title: 'Прикреплённые фотографии',
+            };
+            this.showPhotoGallery();
+        } catch (e) {
+            this.notify('Ошибка загрузки фото', 'error');
+        }
+    },
+
+    showPhotoGallery() {
+        const ctx = this._photoGallery;
+        if (!ctx || !ctx.photos?.length) return;
+
+        const content = `
+            <div class="photo-gallery-grid">
+                ${ctx.photos.map((p, idx) => `
+                    <div class="photo-thumb" onclick="App.openGalleryPhoto(${idx})" title="Открыть">
+                        <img src="${p.thumbnail_url || p.url}" alt="${this.escapeHtml(p.original_filename || p.filename || 'Фото')}">
+                        <div class="photo-thumb-meta">
+                            <div class="photo-thumb-name">${this.escapeHtml(p.original_filename || p.filename || 'Фото')}</div>
+                            ${p.description ? `<div class="photo-thumb-desc">${this.escapeHtml(p.description)}</div>` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+
+        const footer = `
+            <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+        `;
+        this.showModal(ctx.title || 'Фотографии', content, footer);
+    },
+
+    openGalleryPhoto(index) {
+        const ctx = this._photoGallery;
+        const p = ctx?.photos?.[index];
+        if (!p) return;
+        ctx.activeIndex = index;
+
+        const filename = this.escapeHtml(p.original_filename || p.filename || 'photo');
+        const img = `
+            <div class="photo-viewer">
+                <img src="${p.url}" alt="${filename}">
+                ${p.description ? `<div class="text-muted" style="margin-top:10px;">${this.escapeHtml(p.description)}</div>` : ''}
+            </div>
+        `;
+        const footer = `
+            <a class="btn btn-secondary" href="${p.url}" download="${filename}" target="_blank" rel="noopener">
+                <i class="fas fa-download"></i> Скачать
+            </a>
+            <button class="btn btn-secondary" onclick="App.showPhotoGallery()">Назад</button>
+            <button class="btn btn-primary" onclick="App.hideModal()">Закрыть</button>
+        `;
+        this.showModal(filename, img, footer);
     },
 
     /**
@@ -689,15 +1213,15 @@ const App = {
         let html = '';
         
         if (page > 1) {
-            html += `<button onclick="App.goToPage(${page - 1})"><i class="fas fa-chevron-left"></i></button>`;
+            html += `<button type="button" onclick="App.goToPage(${page - 1}); return false;"><i class="fas fa-chevron-left"></i></button>`;
         }
 
         for (let i = Math.max(1, page - 2); i <= Math.min(pages, page + 2); i++) {
-            html += `<button class="${i === page ? 'active' : ''}" onclick="App.goToPage(${i})">${i}</button>`;
+            html += `<button type="button" class="${i === page ? 'active' : ''}" onclick="App.goToPage(${i}); return false;">${i}</button>`;
         }
 
         if (page < pages) {
-            html += `<button onclick="App.goToPage(${page + 1})"><i class="fas fa-chevron-right"></i></button>`;
+            html += `<button type="button" onclick="App.goToPage(${page + 1}); return false;"><i class="fas fa-chevron-right"></i></button>`;
         }
 
         container.innerHTML = html;
@@ -707,7 +1231,10 @@ const App = {
      * Переход на страницу
      */
     goToPage(page) {
-        this.pagination.page = page;
+        const p = parseInt(page, 10);
+        if (!p || p < 1) return;
+        if (this.pagination?.pages && p > this.pagination.pages) return;
+        this.pagination.page = p;
         this.loadObjects();
     },
 
@@ -809,19 +1336,19 @@ const App = {
             let formHtml = '';
 
             if (type === 'wells') {
+                const rawNumber = (obj.number || '').toString();
+                const wellSuffixMatch = rawNumber.match(/^ККС-[^-]+-(.+)$/);
+                const numberSuffix = (wellSuffixMatch ? wellSuffixMatch[1] : rawNumber) || '';
                 formHtml = `
                     <form id="edit-object-form">
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер *</label>
-                            <input type="text" name="number" value="${obj.number || ''}" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Система координат</label>
-                            <select id="coord-system-select" onchange="App.toggleCoordinateInputs()">
-                                <option value="wgs84" selected>WGS84 (широта/долгота)</option>
-                                <option value="msk86">МСК86 Зона 4 (X/Y)</option>
-                            </select>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 180px; background: var(--bg-tertiary);" value="ККС-">
+                                <input type="text" name="number_suffix" id="modal-number-suffix" required style="flex: 1;" value="${this.escapeHtml(numberSuffix)}">
+                            </div>
+                            <div id="well-number-hint" class="text-muted" style="margin-top:6px;"></div>
                         </div>
                         <div id="coords-wgs84-inputs">
                             <div class="form-group">
@@ -831,16 +1358,6 @@ const App = {
                             <div class="form-group">
                                 <label>Долгота (WGS84)</label>
                                 <input type="number" name="longitude" step="0.000001" value="${obj.longitude || ''}">
-                            </div>
-                        </div>
-                        <div id="coords-msk86-inputs" style="display: none;">
-                            <div class="form-group">
-                                <label>X (МСК86)</label>
-                                <input type="number" name="x_msk86" step="0.01" value="${obj.x_msk86 || ''}">
-                            </div>
-                            <div class="form-group">
-                                <label>Y (МСК86)</label>
-                                <input type="number" name="y_msk86" step="0.01" value="${obj.y_msk86 || ''}">
                             </div>
                         </div>
                         <div class="form-group">
@@ -871,14 +1388,7 @@ const App = {
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер</label>
-                            <input type="text" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
-                        </div>
-                        <div class="form-group">
-                            <label>Система координат</label>
-                            <select id="coord-system-select" onchange="App.toggleCoordinateInputs()">
-                                <option value="wgs84" selected>WGS84 (широта/долгота)</option>
-                                <option value="msk86">МСК86 Зона 4 (X/Y)</option>
-                            </select>
+                            <input type="text" id="modal-marker-number" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
                         </div>
                         <div id="coords-wgs84-inputs">
                             <div class="form-group">
@@ -888,16 +1398,6 @@ const App = {
                             <div class="form-group">
                                 <label>Долгота (WGS84)</label>
                                 <input type="number" name="longitude" step="0.000001" value="${obj.longitude || ''}">
-                            </div>
-                        </div>
-                        <div id="coords-msk86-inputs" style="display: none;">
-                            <div class="form-group">
-                                <label>X (МСК86)</label>
-                                <input type="number" name="x_msk86" step="0.01" value="${obj.x_msk86 || ''}">
-                            </div>
-                            <div class="form-group">
-                                <label>Y (МСК86)</label>
-                                <input type="number" name="y_msk86" step="0.01" value="${obj.y_msk86 || ''}">
                             </div>
                         </div>
                         <div class="form-group">
@@ -932,7 +1432,7 @@ const App = {
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер *</label>
-                            <input type="text" name="number" value="${obj.number || ''}" required>
+                            <input type="text" name="number" value="${obj.number || ''}" required readonly style="background: var(--bg-tertiary);">
                         </div>
                         <div class="form-group">
                             <label>Начальный колодец: <strong>${obj.start_well_number || '-'}</strong></label>
@@ -945,8 +1445,12 @@ const App = {
                             <select name="owner_id" id="modal-owner-select" data-value="${obj.owner_id || ''}"></select>
                         </div>
                         <div class="form-group">
+                            <label>Состояние</label>
+                            <select name="status_id" id="modal-status-select" data-value="${obj.status_id || ''}"></select>
+                        </div>
+                        <div class="form-group">
                             <label>Длина (м)</label>
-                            <input type="number" name="length_m" step="0.01" value="${obj.length_m || ''}">
+                            <input type="number" name="length_m" step="0.01" value="${obj.length_m || ''}" disabled style="background: var(--bg-tertiary);">
                         </div>
                         <div class="form-group">
                             <label>Примечания</label>
@@ -955,11 +1459,22 @@ const App = {
                         <hr>
                         <h4>Каналы (${obj.channels ? obj.channels.length : 0} из 16)</h4>
                         <div id="channels-list" style="max-height: 200px; overflow-y: auto;">
-                            ${obj.channels && obj.channels.length > 0 ? obj.channels.map(ch => `
-                                <div class="channel-item" style="padding: 8px; border-bottom: 1px solid var(--border-color);">
-                                    <strong>Канал ${ch.channel_number}</strong>: ${ch.kind_name || '-'} / ${ch.status_name || '-'}
-                                </div>
-                            `).join('') : '<p class="text-muted">Каналы не добавлены</p>'}
+                            ${(() => {
+                                const channels = (obj.channels || []).slice().sort((a, b) => (a.channel_number || 0) - (b.channel_number || 0));
+                                const lastNumber = channels.length ? channels[channels.length - 1].channel_number : null;
+                                return channels.length > 0 ? channels.map(ch => `
+                                    <div class="channel-item" style="padding: 8px; border-bottom: 1px solid var(--border-color); display:flex; gap:8px; align-items:center;">
+                                        ${lastNumber !== null && ch.channel_number === lastNumber ? `
+                                            <button type="button" class="btn btn-sm btn-danger" title="Удалить канал" onclick="App.deleteLastChannelFromDirection(${obj.id}, ${ch.id})">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        ` : `<span style="width:34px;"></span>`}
+                                        <div style="flex:1;">
+                                            <strong>Канал ${ch.channel_number}</strong>: ${ch.kind_name || '-'} / ${ch.status_name || '-'}
+                                        </div>
+                                    </div>
+                                `).join('') : '<p class="text-muted">Каналы не добавлены</p>';
+                            })()}
                         </div>
                         <button type="button" class="btn btn-sm btn-secondary" onclick="App.showAddChannelToDirection(${obj.id})" style="margin-top: 8px;">
                             <i class="fas fa-plus"></i> Добавить канал
@@ -1003,7 +1518,7 @@ const App = {
                         <input type="hidden" name="object_type_code" value="${obj.object_type_code || ''}">
                         <div class="form-group">
                             <label>Номер</label>
-                            <input type="text" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
+                            <input type="text" id="modal-cable-number" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
                         </div>
                         <div class="form-group">
                             <label>Длина расч. (м)</label>
@@ -1049,13 +1564,6 @@ const App = {
                         </div>
 
                         <div id="cable-geometry-block" style="display: none;">
-                            <div class="form-group">
-                                <label>Система координат</label>
-                                <select id="cable-coord-system">
-                                    <option value="wgs84">WGS84 (долгота, широта)</option>
-                                    <option value="msk86">МСК86 Зона 4 (X, Y)</option>
-                                </select>
-                            </div>
                             <div class="form-group">
                                 <label>Координаты (точки ломаной)</label>
                                 <div id="cable-coordinates-list"></div>
@@ -1109,6 +1617,9 @@ const App = {
                         <button type="button" class="btn btn-sm btn-secondary" onclick="App.showAddObjectToGroup(${obj.id})" style="margin-top: 8px;">
                             <i class="fas fa-plus"></i> Добавить объекты
                         </button>
+                        <button type="button" class="btn btn-sm btn-primary" onclick="App.startGroupPickOnMap(${obj.id})" style="margin-top: 8px; margin-left: 8px;">
+                            <i class="fas fa-crosshairs"></i> Указать объект на карте
+                        </button>
                     </form>
                 `;
             }
@@ -1144,6 +1655,22 @@ const App = {
                 );
             }
 
+            // Группы, в которые входит объект (read-only)
+            if (type !== 'groups' && formHtml.includes('</form>')) {
+                formHtml = formHtml.replace(
+                    '</form>',
+                    `
+                        <hr>
+                        <h4>Группы</h4>
+                        <div class="form-group">
+                            <label>Входит в группы</label>
+                            <div id="edit-object-groups" class="text-muted">Загрузка...</div>
+                        </div>
+                    </form>
+                    `
+                );
+            }
+
             const footer = `
                 <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
                 <button class="btn btn-danger" onclick="App.deleteObject('${type}', ${id})" style="margin-right: auto;">
@@ -1157,9 +1684,19 @@ const App = {
             // Загружаем справочники и устанавливаем значения
             await this.loadModalSelectsWithValues(type);
 
+            // Подсказка/валидация номера колодца при редактировании (уникальность)
+            if (type === 'wells') {
+                this.setupWellEditNumberValidation(id);
+            }
+
             // Подгружаем фотографии (если блок есть)
             if (photoTable) {
                 this.loadObjectPhotos(photoTable, obj.id).catch(() => {});
+            }
+
+            // Подгружаем группы (если блок есть)
+            if (type !== 'groups') {
+                this.loadObjectGroupsIntoEditForm(type, id).catch(() => {});
             }
             
         } catch (error) {
@@ -1275,6 +1812,11 @@ const App = {
                 const select = document.getElementById(selectId);
                 if (select && select.dataset.value) {
                     select.value = select.dataset.value;
+                    // Важно: после установки owner_id нужно пересчитать префикс/номер по актуальному коду собственника
+                    // (иначе остаётся дефолтный код, например "АДМ")
+                    if (selectId === 'modal-owner-select') {
+                        select.dispatchEvent(new Event('change'));
+                    }
                 }
             });
 
@@ -1332,13 +1874,91 @@ const App = {
     },
 
     /**
+     * Колодцы: подсветка/проверка уникальности номера при редактировании
+     */
+    setupWellEditNumberValidation(wellId) {
+        const ownerSelect = document.getElementById('modal-owner-select');
+        const prefixInput = document.getElementById('modal-number-prefix');
+        const suffixInput = document.getElementById('modal-number-suffix');
+        const hint = document.getElementById('well-number-hint');
+        if (!suffixInput) return;
+
+        const lightGreen = 'rgba(34, 197, 94, 0.15)';
+        const lightRed = 'rgba(239, 68, 68, 0.15)';
+
+        let timer = null;
+        let lastChecked = '';
+
+        const setOk = () => {
+            suffixInput.style.background = lightGreen;
+            if (hint) hint.textContent = '';
+            if (suffixInput.setCustomValidity) suffixInput.setCustomValidity('');
+        };
+
+        const setBad = () => {
+            suffixInput.style.background = lightRed;
+            if (hint) hint.textContent = 'Требуется поменять порядковый номер, так как колодец с таким номером уже есть в системе';
+            if (suffixInput.setCustomValidity) suffixInput.setCustomValidity('Номер колодца уже существует');
+        };
+
+        const clear = () => {
+            suffixInput.style.background = '';
+            if (hint) hint.textContent = '';
+            if (suffixInput.setCustomValidity) suffixInput.setCustomValidity('');
+        };
+
+        const buildNumber = () => {
+            const prefix = (prefixInput?.value || '').toString();
+            const suffix = (suffixInput?.value || '').toString();
+            return `${prefix}${suffix}`.trim();
+        };
+
+        const check = async () => {
+            const number = buildNumber();
+            if (!number || number === lastChecked) return;
+            lastChecked = number;
+
+            try {
+                const resp = await API.wells.existsNumber(number, wellId);
+                const exists = !!(resp?.data?.exists);
+                if (exists) setBad();
+                else setOk();
+            } catch (_) {
+                clear();
+            }
+        };
+
+        const schedule = () => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(check, 250);
+        };
+
+        // Доп. обработчик поверх существующего (который обновляет префикс)
+        if (ownerSelect) ownerSelect.addEventListener('change', schedule);
+        suffixInput.addEventListener('input', schedule);
+
+        // стартовая проверка
+        schedule();
+    },
+
+    /**
      * Отправка формы редактирования объекта
      */
     async submitEditObject(type, id) {
         const form = document.getElementById('edit-object-form');
+        if (form?.reportValidity && !form.reportValidity()) return;
         const formData = new FormData(form);
         const data = Object.fromEntries(formData.entries());
         delete data.id;
+
+        // Колодцы: собираем полный номер из префикса и суффикса
+        if (type === 'wells' && (data.number_prefix !== undefined || data.number_suffix !== undefined)) {
+            const prefix = (data.number_prefix || '').toString();
+            const suffix = (data.number_suffix || '').toString();
+            data.number = `${prefix}${suffix}`.trim();
+            delete data.number_prefix;
+            delete data.number_suffix;
+        }
         
         // Собираем выбранные группы
         const groupCheckboxes = form.querySelectorAll('input[name="group_ids"]:checked');
@@ -1371,7 +1991,7 @@ const App = {
                             const coordinates = this.collectCableCoordinates();
                             if (coordinates.length >= 2) {
                                 data.coordinates = coordinates;
-                                data.coordinate_system = document.getElementById('cable-coord-system')?.value || 'wgs84';
+                                data.coordinate_system = 'wgs84';
                             }
                         } else if (objectTypeCode === 'cable_duct') {
                             const channelsSelect = document.getElementById('cable-route-channels');
@@ -1617,6 +2237,98 @@ const App = {
         }
     },
 
+    startGroupPickOnMap(groupId) {
+        this.hideModal();
+        this.switchPanel('map');
+        MapManager.startGroupPickMode(groupId);
+    },
+
+    async addGroupObjectFromMap(groupId, hit) {
+        const gid = parseInt(groupId);
+        if (!gid || !hit) return;
+
+        const type = hit.objectType;
+        const id = parseInt(hit?.properties?.id);
+        if (!type || !id) {
+            this.notify('Не удалось определить объект', 'error');
+            return;
+        }
+
+        const allowed = new Set(['well', 'channel_direction', 'marker_post', 'unified_cable']);
+        if (!allowed.has(type)) {
+            this.notify('Этот тип объекта нельзя добавить в группу с карты', 'warning');
+            return;
+        }
+
+        try {
+            const resp = await API.groups.addObjects(gid, [{ type, id }]);
+            if (resp?.success === false) {
+                this.notify(resp.message || 'Ошибка добавления', 'error');
+                return;
+            }
+            this.notify('Объект добавлен в группу', 'success');
+            // Возвращаем пользователя в карточку группы с обновлённым списком
+            this.showEditObjectModal('groups', gid);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка добавления', 'error');
+        }
+    },
+
+    groupObjectTypeForContext(objectTypeOrTab) {
+        const map = {
+            // map object types
+            well: 'well',
+            channel_direction: 'channel_direction',
+            marker_post: 'marker_post',
+            unified_cable: 'unified_cable',
+            ground_cable: 'ground_cable',
+            aerial_cable: 'aerial_cable',
+            duct_cable: 'duct_cable',
+            cable_channel: 'cable_channel',
+
+            // tabs/modals
+            wells: 'well',
+            directions: 'channel_direction',
+            markers: 'marker_post',
+            unified_cables: 'unified_cable',
+            channels: 'cable_channel',
+        };
+        return map[objectTypeOrTab] || objectTypeOrTab;
+    },
+
+    async loadObjectGroupsIntoInfo(objectType, objectId) {
+        const panel = document.getElementById('object-info-panel');
+        const valueEl = document.getElementById('info-groups');
+        if (!panel || !valueEl) return;
+
+        // если пользователь уже выбрал другой объект — не обновляем
+        if (String(panel.dataset.objectType) !== String(objectType) || String(panel.dataset.objectId) !== String(objectId)) return;
+
+        const type = this.groupObjectTypeForContext(objectType);
+        try {
+            const resp = await API.groups.byObject(type, objectId);
+            const rows = resp?.data || resp || [];
+            const names = (rows || []).map(g => (g.number ? `${g.number} — ${g.name}` : (g.name || g.id))).filter(Boolean);
+            valueEl.textContent = names.length ? names.join(', ') : '-';
+        } catch (e) {
+            valueEl.textContent = '-';
+        }
+    },
+
+    async loadObjectGroupsIntoEditForm(tabType, objectId) {
+        const el = document.getElementById('edit-object-groups');
+        if (!el) return;
+        const type = this.groupObjectTypeForContext(tabType);
+        try {
+            const resp = await API.groups.byObject(type, objectId);
+            const rows = resp?.data || resp || [];
+            const names = (rows || []).map(g => (g.number ? `${g.number} — ${g.name}` : (g.name || g.id))).filter(Boolean);
+            el.textContent = names.length ? names.join(', ') : '-';
+        } catch (e) {
+            el.textContent = '-';
+        }
+    },
+
     /**
      * Показ модального окна добавления канала к направлению
      */
@@ -1637,7 +2349,7 @@ const App = {
                 </div>
                 <div class="form-group">
                     <label>Диаметр (мм)</label>
-                    <input type="number" name="diameter_mm">
+                    <input type="number" name="diameter_mm" value="110">
                 </div>
                 <div class="form-group">
                     <label>Примечания</label>
@@ -1655,6 +2367,22 @@ const App = {
         
         // Загружаем справочники
         await this.loadModalSelects('channels');
+    },
+
+    async deleteLastChannelFromDirection(directionId, channelId) {
+        if (!confirm('Удалить последний канал?')) return;
+        try {
+            const resp = await API.cableChannels.delete(channelId);
+            if (resp?.success === false) {
+                this.notify(resp.message || 'Ошибка удаления канала', 'error');
+                return;
+            }
+            this.notify('Канал удалён', 'success');
+            // Обновляем окно редактирования направления
+            this.showEditObjectModal('directions', directionId);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка удаления канала', 'error');
+        }
     },
 
     /**
@@ -1745,6 +2473,15 @@ const App = {
         return new Date(date).toLocaleDateString('ru-RU');
     },
 
+    escapeHtml(value) {
+        return (value ?? '').toString()
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    },
+
     /**
      * Просмотр инцидента
      */
@@ -1790,15 +2527,25 @@ const App = {
                     break;
             }
 
+            const exportBtn = (type === 'incidents')
+                ? ''
+                : `<button class="btn btn-secondary" onclick="App.showReportExportModal('${type}')">
+                        <i class="fas fa-download"></i> Выгрузить отчет
+                   </button>`;
+
             container.innerHTML = `
                 <div class="panel-header">
                     <h3>${this.getReportTitle(type)}</h3>
-                    <button class="btn btn-secondary" onclick="API.reports.export('${type}')">
-                        <i class="fas fa-download"></i> Экспорт CSV
-                    </button>
+                    ${exportBtn}
                 </div>
                 ${html}
             `;
+
+            // Если отчёт ниже карточек — прокручиваем до него (теперь #report-content скроллится)
+            try {
+                container.scrollTop = 0;
+                container.scrollIntoView({ block: 'start' });
+            } catch (_) {}
         } catch (error) {
             container.innerHTML = '<p style="color: var(--danger-color);">Ошибка загрузки отчёта</p>';
         }
@@ -1817,6 +2564,12 @@ const App = {
     renderObjectsReport(data) {
         // Фильтр по собственнику
         const owners = data?.owners || [];
+        const formatLen = (v) => {
+            if (v === null || v === undefined || v === '') return '-';
+            const n = Number(v);
+            if (Number.isNaN(n)) return '-';
+            return n.toFixed(2);
+        };
         return `
             <div class="filters-row" style="margin: 12px 0;">
                 <select id="report-objects-owner">
@@ -1836,7 +2589,7 @@ const App = {
                         <tr>
                             <td>${item.object_name}</td>
                             <td>${item.count}</td>
-                            <td>${item.total_length || '-'}</td>
+                            <td>${formatLen(item.total_length)}</td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -1855,8 +2608,8 @@ const App = {
                 container.innerHTML = `
                     <div class="panel-header">
                         <h3>${this.getReportTitle('objects')}</h3>
-                        <button class="btn btn-secondary" onclick="API.reports.export('objects')">
-                            <i class="fas fa-download"></i> Экспорт CSV
+                        <button class="btn btn-secondary" onclick="App.showReportExportModal('objects')">
+                            <i class="fas fa-download"></i> Выгрузить отчет
                         </button>
                     </div>
                     ${this.renderObjectsReport(resp.data)}
@@ -1874,8 +2627,8 @@ const App = {
         const contracts = data?.contracts || [];
         const selectedId = data?.contract?.id ? String(data.contract.id) : '';
 
-        const contracted = data?.contracted || { stats: { count: 0, length_sum: 0, cost_per_meter: null }, cables: [] };
-        const uncontracted = data?.uncontracted || { stats: { count: 0, length_sum: 0 }, cables: [] };
+        const contracted = data?.contracted || { stats: { count: 0, length_sum_contract_part: 0, cost_per_meter: null }, cables: [] };
+        const uncontracted = data?.uncontracted || { stats: { count: 0, length_sum_contract_part: 0, cost_per_meter: null }, cables: [] };
 
         const renderCablesTable = (rows) => `
             <table>
@@ -1886,7 +2639,8 @@ const App = {
                         <th>Тип кабеля</th>
                         <th>Кабель (из каталога)</th>
                         <th>Собственник</th>
-                        <th>Длина расч. (м)</th>
+                        <th>Длина расч. (м), всего кабеля</th>
+                        <th>Длина расч. (м) в части контракта</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1898,11 +2652,15 @@ const App = {
                             <td>${c.marking || '-'}</td>
                             <td>${c.owner_name || '-'}</td>
                             <td>${c.length_calculated || 0}</td>
+                            <td>${Number(c.length_contract_part || 0).toFixed(2)}</td>
                         </tr>
-                    `).join('') || '<tr><td colspan="6">Нет данных</td></tr>'}
+                    `).join('') || '<tr><td colspan="7">Нет данных</td></tr>'}
                 </tbody>
             </table>
         `;
+
+        const green = (v) => `<span style="color: var(--success-color); font-weight: 600;">${v}</span>`;
+        const fmt2 = (v) => Number(v || 0).toFixed(2);
 
         return `
             <div class="filters-row" style="margin: 12px 0;">
@@ -1920,9 +2678,9 @@ const App = {
                     <h4>
                         Кабеля контракта
                         <span class="text-muted">
-                            (Количество кабелей: ${contracted.stats.count},
-                            Общая протяженность кабелей (м): ${Number(contracted.stats.length_sum || 0).toFixed(2)},
-                            Стоимость за 1 метр: ${contracted.stats.cost_per_meter === null ? '-' : contracted.stats.cost_per_meter})
+                            (Количество кабелей: ${green(contracted.stats.count)},
+                            Общая протяженность кабелей (м) в части контракта: ${green(fmt2(contracted.stats.length_sum_contract_part || 0))},
+                            Стоимость за 1 метр: ${green(contracted.stats.cost_per_meter === null ? '-' : contracted.stats.cost_per_meter)})
                         </span>
                     </h4>
                     ${renderCablesTable(contracted.cables)}
@@ -1932,8 +2690,8 @@ const App = {
                     <h4>
                         Не законтрактованные Кабеля собственника контракта
                         <span class="text-muted">
-                            (Количество кабелей: ${uncontracted.stats.count},
-                            Общая протяженность кабелей (м): ${Number(uncontracted.stats.length_sum || 0).toFixed(2)})
+                            (Количество кабелей: ${green(uncontracted.stats.count)},
+                            Общая протяженность кабелей (м) в части контракта: ${green(fmt2(uncontracted.stats.length_sum_contract_part || 0))})
                         </span>
                     </h4>
                     ${renderCablesTable(uncontracted.cables)}
@@ -1955,8 +2713,8 @@ const App = {
                 container.innerHTML = `
                     <div class="panel-header">
                         <h3>${this.getReportTitle('contracts')}</h3>
-                        <button class="btn btn-secondary" onclick="API.reports.export('contracts')">
-                            <i class="fas fa-download"></i> Экспорт CSV
+                        <button class="btn btn-secondary" onclick="App.showReportExportModal('contracts')">
+                            <i class="fas fa-download"></i> Выгрузить отчет
                         </button>
                     </div>
                     ${this.renderContractsReport(resp.data)}
@@ -2044,11 +2802,18 @@ const App = {
      */
     async showReference(type) {
         this.currentReference = type;
+        this.lastReferenceInReferencesPanel = type;
 
         // Справочник display_styles удалён
         if (type === 'display_styles') {
             this.notify('Справочник удалён', 'warning');
             return;
+        }
+
+        // Управление справочниками: обычно только админ, но "Контракты" можно и роли "Пользователь"
+        const addBtn = document.getElementById('btn-add-ref');
+        if (addBtn) {
+            addBtn.classList.toggle('hidden', !this.canManageReferenceType(type) || type === 'object_types');
         }
         
         document.querySelector('.references-grid').classList.add('hidden');
@@ -2085,6 +2850,223 @@ const App = {
         document.getElementById('reference-content').classList.add('hidden');
     },
 
+    async loadContractsPanel() {
+        // Контракты — отдельный раздел (не "Справочники")
+        this.currentReference = 'contracts';
+        const header = document.getElementById('contracts-table-header');
+        const body = document.getElementById('contracts-table-body');
+        if (!header || !body) return;
+
+        // Кнопка "Добавить" доступна администратору и роли "Пользователь" (при write)
+        document.getElementById('btn-add-contract')?.classList.toggle('hidden', !this.canManageReferenceType('contracts'));
+
+        header.innerHTML = '<th>Загрузка...</th>';
+        body.innerHTML = `<tr><td>Загрузка...</td></tr>`;
+
+        try {
+            const resp = await API.references.list('contracts', { page: 1, limit: 500 });
+            const data = resp?.data || [];
+            const canManage = this.canManageReferenceType('contracts');
+
+            // Колонки как в справочнике contracts
+            const columns = ['number', 'name', 'owner_id', 'landlord_id', 'start_date', 'end_date', 'status', 'amount', 'notes'];
+            const labels = {
+                number: 'Номер',
+                name: 'Название',
+                owner_id: 'Арендатор',
+                landlord_id: 'Арендодатель',
+                start_date: 'Дата начала',
+                end_date: 'Дата окончания',
+                status: 'Статус',
+                amount: 'Сумма',
+                notes: 'Примечания',
+            };
+
+            header.innerHTML =
+                columns.map(c => `<th>${labels[c] || c}</th>`).join('') +
+                (canManage ? '<th>Действия</th>' : '');
+
+            const fmt = (v) => (v === null || v === undefined || v === '' ? '-' : String(v));
+            const fmtContracts = (col, row) => {
+                if (col === 'owner_id') return fmt(row.owner_name || row.owner_id);
+                if (col === 'landlord_id') return fmt(row.landlord_name || row.landlord_id);
+                return fmt(row[col]);
+            };
+
+            body.innerHTML = (data || []).map(row => `
+                <tr>
+                    ${columns.map(c => `<td>${fmtContracts(c, row)}</td>`).join('')}
+                    ${canManage ? `
+                        <td>
+                            <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})" title="Редактировать">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                        </td>
+                    ` : ''}
+                </tr>
+            `).join('') || `<tr><td colspan="${canManage ? columns.length + 1 : columns.length}">Нет данных</td></tr>`;
+        } catch (e) {
+            header.innerHTML = '<th>Ошибка</th>';
+            body.innerHTML = `<tr><td>Ошибка загрузки</td></tr>`;
+        }
+    },
+
+    showAddContractModal() {
+        this.currentReference = 'contracts';
+        // Переиспользуем существующую форму справочника
+        this.showAddReferenceModal();
+    },
+
+    async loadSettingsPanel() {
+        // Панель доступна всем пользователям (персональные настройки)
+        await this.loadSettings().catch(() => {});
+
+        const z = document.getElementById('settings-map-zoom');
+        const lat = document.getElementById('settings-map-lat');
+        const lng = document.getElementById('settings-map-lng');
+        const len = document.getElementById('settings-cable-well-len');
+        const wDir = document.getElementById('settings-line-weight-direction');
+        const wCable = document.getElementById('settings-line-weight-cable');
+        const iconSize = document.getElementById('settings-icon-size-well-marker');
+        const fsWell = document.getElementById('settings-font-size-well-number');
+        const fsDirLen = document.getElementById('settings-font-size-direction-length');
+        const geo = document.getElementById('settings-url-geoproj');
+        const cad = document.getElementById('settings-url-cadastre');
+        const entryKind = document.getElementById('settings-well-entry-kind-code');
+        const hkDir = document.getElementById('settings-hotkey-add-direction');
+        const hkWell = document.getElementById('settings-hotkey-add-well');
+        const hkMarker = document.getElementById('settings-hotkey-add-marker');
+        const hkDuct = document.getElementById('settings-hotkey-add-duct-cable');
+        const hkGround = document.getElementById('settings-hotkey-add-ground-cable');
+        const hkAerial = document.getElementById('settings-hotkey-add-aerial-cable');
+
+        if (z) z.value = (this.settings.map_default_zoom ?? MapManager.defaultZoom ?? 14);
+        if (lat) lat.value = (this.settings.map_default_lat ?? (MapManager.defaultCenter?.[0] ?? 66.10231));
+        if (lng) lng.value = (this.settings.map_default_lng ?? (MapManager.defaultCenter?.[1] ?? 76.68617));
+        if (len) {
+            len.value = (this.settings.cable_in_well_length_m ?? 2);
+            // Глобальная настройка: менять может только root
+            len.disabled = !this.isRoot();
+            if (!this.isRoot()) len.style.background = 'var(--bg-tertiary)';
+        }
+        if (wDir) wDir.value = (this.settings.line_weight_direction ?? 3);
+        if (wCable) wCable.value = (this.settings.line_weight_cable ?? 2);
+        if (iconSize) iconSize.value = (this.settings.icon_size_well_marker ?? 24);
+        if (fsWell) fsWell.value = (this.settings.font_size_well_number_label ?? 12);
+        if (fsDirLen) fsDirLen.value = (this.settings.font_size_direction_length_label ?? 12);
+        if (geo) geo.value = (this.settings.url_geoproj ?? '');
+        if (cad) cad.value = (this.settings.url_cadastre ?? '');
+        if (hkDir) hkDir.value = (this.settings.hotkey_add_direction ?? '');
+        if (hkWell) hkWell.value = (this.settings.hotkey_add_well ?? '');
+        if (hkMarker) hkMarker.value = (this.settings.hotkey_add_marker ?? '');
+        if (hkDuct) hkDuct.value = (this.settings.hotkey_add_duct_cable ?? '');
+        if (hkGround) hkGround.value = (this.settings.hotkey_add_ground_cable ?? '');
+        if (hkAerial) hkAerial.value = (this.settings.hotkey_add_aerial_cable ?? '');
+
+        // Заполняем список "Код — точка ввода" (object_kinds.code) только для вида объекта "Колодец"
+        if (entryKind) {
+            try {
+                const [typesResp, kindsResp] = await Promise.all([
+                    API.references.all('object_types'),
+                    API.references.all('object_kinds'),
+                ]);
+                const types = typesResp?.data || [];
+                const kinds = kindsResp?.data || [];
+                const wellType = (types || []).find(t => (t.code || '') === 'well');
+                const wellTypeId = wellType?.id;
+                const filtered = wellTypeId
+                    ? (kinds || []).filter(k => String(k.object_type_id) === String(wellTypeId))
+                    : [];
+                filtered.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+
+                entryKind.innerHTML = '<option value="">Не задано</option>' +
+                    filtered.map(k => `<option value="${this.escapeHtml(k.code || '')}">${this.escapeHtml(k.code || '')} — ${this.escapeHtml(k.name || '')}</option>`).join('');
+                entryKind.value = (this.settings.well_entry_point_kind_code ?? '');
+            } catch (_) {
+                // ignore
+            }
+        }
+    },
+
+    async saveSettings() {
+        const z = document.getElementById('settings-map-zoom')?.value;
+        const lat = document.getElementById('settings-map-lat')?.value;
+        const lng = document.getElementById('settings-map-lng')?.value;
+        const len = document.getElementById('settings-cable-well-len')?.value;
+        const wDir = document.getElementById('settings-line-weight-direction')?.value;
+        const wCable = document.getElementById('settings-line-weight-cable')?.value;
+        const iconSize = document.getElementById('settings-icon-size-well-marker')?.value;
+        const fsWell = document.getElementById('settings-font-size-well-number')?.value;
+        const fsDirLen = document.getElementById('settings-font-size-direction-length')?.value;
+        const geo = document.getElementById('settings-url-geoproj')?.value;
+        const cad = document.getElementById('settings-url-cadastre')?.value;
+        const entryKind = document.getElementById('settings-well-entry-kind-code')?.value;
+        const hkDir = document.getElementById('settings-hotkey-add-direction')?.value;
+        const hkWell = document.getElementById('settings-hotkey-add-well')?.value;
+        const hkMarker = document.getElementById('settings-hotkey-add-marker')?.value;
+        const hkDuct = document.getElementById('settings-hotkey-add-duct-cable')?.value;
+        const hkGround = document.getElementById('settings-hotkey-add-ground-cable')?.value;
+        const hkAerial = document.getElementById('settings-hotkey-add-aerial-cable')?.value;
+
+        const normalizeHotkey = (v) => {
+            const s = (v ?? '').toString().trim();
+            if (!s) return '';
+            return s.length ? s[0] : '';
+        };
+        const validateHotkey = (label, v) => {
+            const s = normalizeHotkey(v);
+            if (!s) return '';
+            if (!/^[a-z0-9]$/i.test(s)) {
+                this.notify(`Hotkey для "${label}" должен быть одной латинской буквой или цифрой`, 'error');
+                throw new Error('invalid_hotkey');
+            }
+            return s.toLowerCase();
+        };
+
+        const payload = {
+            map_default_zoom: z,
+            map_default_lat: lat,
+            map_default_lng: lng,
+            // глобальная настройка — только root (остальным не отправляем)
+            ...(this.isRoot() ? { cable_in_well_length_m: len } : {}),
+            line_weight_direction: wDir,
+            line_weight_cable: wCable,
+            icon_size_well_marker: iconSize,
+            font_size_well_number_label: fsWell,
+            font_size_direction_length_label: fsDirLen,
+            url_geoproj: geo,
+            url_cadastre: cad,
+            well_entry_point_kind_code: (entryKind ?? '').toString(),
+        };
+        try {
+            payload.hotkey_add_direction = validateHotkey('Добавить направление', hkDir);
+            payload.hotkey_add_well = validateHotkey('Добавить колодец', hkWell);
+            payload.hotkey_add_marker = validateHotkey('Добавить столбик', hkMarker);
+            payload.hotkey_add_duct_cable = validateHotkey('Добавить кабель в канализации', hkDuct);
+            payload.hotkey_add_ground_cable = validateHotkey('Добавить кабель в грунте', hkGround);
+            payload.hotkey_add_aerial_cable = validateHotkey('Добавить воздушный кабель', hkAerial);
+        } catch (e) {
+            if (e?.message === 'invalid_hotkey') return;
+            // continue - unexpected
+        }
+
+        try {
+            const resp = await API.settings.update(payload);
+            if (resp?.success === false) {
+                this.notify(resp.message || 'Ошибка сохранения', 'error');
+                return;
+            }
+            this.notify('Настройки сохранены', 'success');
+
+            // Обновляем локально и применяем (центр/зум — для следующей инициализации карты)
+            await this.loadSettings().catch(() => {});
+            // Применяем визуальные настройки сразу
+            try { await MapManager.loadAllLayers?.(); } catch (_) {}
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка сохранения', 'error');
+        }
+    },
+
     /**
      * Отрисовка таблицы справочника
      */
@@ -2094,22 +3076,73 @@ const App = {
             return;
         }
 
-        const columns = Object.keys(data[0]).filter(k => !['id', 'created_at', 'updated_at', 'permissions'].includes(k));
+        const columnsByType = {
+            object_types: ['code', 'name', 'description', 'icon', 'color'],
+            object_kinds: ['code', 'name', 'object_type_id', 'description', 'is_default'],
+            object_status: ['code', 'name', 'color', 'description', 'sort_order', 'is_default'],
+            owners: ['code', 'name', 'short_name', 'inn', 'address', 'contact_person', 'contact_phone', 'contact_email', 'notes', 'is_default'],
+            contracts: ['number', 'name', 'owner_id', 'landlord_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
+            cable_types: ['code', 'name', 'description', 'is_default'],
+            cable_catalog: ['cable_type_id', 'fiber_count', 'marking', 'description', 'is_default'],
+        };
+
+        const labelByType = {
+            object_types: { code: 'Код', name: 'Название', description: 'Описание', icon: 'Иконка', color: 'Цвет' },
+            object_kinds: { code: 'Код', name: 'Название', object_type_id: 'Вид объекта', description: 'Описание', is_default: 'По умолчанию' },
+            object_status: { code: 'Код', name: 'Название', color: 'Цвет', description: 'Описание', sort_order: 'Порядок', is_default: 'По умолчанию' },
+            owners: {
+                code: 'Код', name: 'Название', short_name: 'Краткое название', inn: 'ИНН',
+                address: 'Адрес', contact_person: 'Контактное лицо', contact_phone: 'Телефон', contact_email: 'Email',
+                notes: 'Примечания', is_default: 'По умолчанию'
+            },
+            contracts: {
+                number: 'Номер', name: 'Название', owner_id: 'Арендатор', landlord_id: 'Арендодатель',
+                start_date: 'Дата начала', end_date: 'Дата окончания', status: 'Статус', amount: 'Сумма',
+                notes: 'Примечания', is_default: 'По умолчанию'
+            },
+            cable_types: { code: 'Код', name: 'Название', description: 'Описание', is_default: 'По умолчанию' },
+            cable_catalog: { cable_type_id: 'Тип кабеля', fiber_count: 'Волокон', marking: 'Маркировка', description: 'Описание', is_default: 'По умолчанию' },
+        };
+
+        const type = this.currentReference || '';
+        const rawColumns = Object.keys(data[0]).filter(k => !['id', 'created_at', 'updated_at', 'permissions'].includes(k));
+        const columns = (columnsByType[type] || rawColumns).filter(col => rawColumns.includes(col));
+        const canManage = this.canManageReferenceType(type);
+
+        const formatCell = (col, value, row) => {
+            if (col === 'is_default') return value ? 'Да' : '-';
+            if (value === null || value === undefined || value === '') return '-';
+            // FK -> название
+            if (type === 'object_kinds' && col === 'object_type_id') {
+                return row?.object_type_name || String(value);
+            }
+            if (type === 'contracts' && col === 'owner_id') {
+                return row?.owner_name || String(value);
+            }
+            if (type === 'contracts' && col === 'landlord_id') {
+                return row?.landlord_name || String(value);
+            }
+            return String(value);
+        };
         
         document.getElementById('ref-table-header').innerHTML = 
-            columns.slice(0, 5).map(col => `<th>${col}</th>`).join('') + '<th>Действия</th>';
+            columns.map(col => `<th>${(labelByType[type]?.[col] || col)}</th>`).join('') + (canManage ? '<th>Действия</th>' : '');
         
         document.getElementById('ref-table-body').innerHTML = data.map(row => `
             <tr>
-                ${columns.slice(0, 5).map(col => `<td>${row[col] || '-'}</td>`).join('')}
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="App.deleteReference(${row.id})">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </td>
+                ${columns.map(col => `<td>${formatCell(col, row[col], row)}</td>`).join('')}
+                ${canManage ? `
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        ${this.currentReference === 'object_types' ? '' : `
+                            <button class="btn btn-sm btn-danger" onclick="App.deleteReference(${row.id})">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        `}
+                    </td>
+                ` : ''}
             </tr>
         `).join('');
     },
@@ -2145,9 +3178,125 @@ const App = {
                     <button class="btn btn-sm btn-primary" onclick="App.editUser(${user.id})">
                         <i class="fas fa-edit"></i>
                     </button>
+                    ${user.login === 'root' ? '' : `
+                        <button class="btn btn-sm btn-danger" onclick="App.deleteUser(${user.id})" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    `}
                 </td>
             </tr>
         `).join('');
+    },
+
+    async editUser(id) {
+        try {
+            const resp = await API.users.list();
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка загрузки пользователей', 'error');
+                return;
+            }
+            const users = resp.data || [];
+            const user = users.find(u => String(u.id) === String(id));
+            if (!user) {
+                this.notify('Пользователь не найден', 'error');
+                return;
+            }
+
+            const content = `
+                <form id="user-edit-form">
+                    <input type="hidden" name="id" value="${user.id}">
+                    <div class="form-group">
+                        <label>Логин (только чтение)</label>
+                        <input type="text" value="${this.escapeHtml(user.login)}" readonly style="background: var(--bg-tertiary);">
+                    </div>
+                    <div class="form-group">
+                        <label>Пароль (мин. 6, оставить пустым — не менять)</label>
+                        <input type="password" name="password" minlength="6" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label>Полное имя</label>
+                        <input type="text" name="full_name" value="${this.escapeHtml(user.full_name || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" name="email" value="${this.escapeHtml(user.email || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label>Роль *</label>
+                        <select name="role_id" required id="user-edit-role-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" name="is_active" value="1" ${user.is_active ? 'checked' : ''}>
+                            Активен
+                        </label>
+                    </div>
+                </form>
+            `;
+
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+                ${user.login === 'root' ? '' : `
+                    <button class="btn btn-danger" onclick="App.deleteUser(${user.id})" style="margin-left:auto;">
+                        <i class="fas fa-trash"></i> Удалить
+                    </button>
+                `}
+                <button class="btn btn-primary" onclick="App.submitUserEdit(${user.id})">
+                    <i class="fas fa-save"></i> Сохранить
+                </button>
+            `;
+
+            this.showModal(`Пользователь: ${user.login}`, content, footer);
+            await this.loadRolesSelect('user-edit-role-select', user.role_code);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    async submitUserEdit(id) {
+        const form = document.getElementById('user-edit-form');
+        if (!form) return;
+
+        const fd = new FormData(form);
+        const data = Object.fromEntries(fd.entries());
+
+        // checkbox -> boolean
+        data.is_active = !!form.querySelector('input[name="is_active"]')?.checked;
+
+        // Пустой пароль не отправляем
+        if (!data.password) delete data.password;
+
+        // Приводим role_id к числу
+        if (data.role_id !== undefined) data.role_id = parseInt(data.role_id);
+
+        try {
+            const resp = await API.users.update(id, data);
+            if (resp?.success) {
+                this.hideModal();
+                this.notify('Пользователь обновлён', 'success');
+                this.loadUsers();
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    async deleteUser(id) {
+        if (!confirm('Удалить пользователя? (будет деактивирован)')) return;
+        try {
+            const resp = await API.users.delete(id);
+            if (resp?.success) {
+                this.notify('Пользователь деактивирован', 'success');
+                this.hideModal();
+                this.loadUsers();
+            } else {
+                this.notify(resp?.message || 'Ошибка', 'error');
+            }
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
     },
 
     /**
@@ -2243,13 +3392,6 @@ const App = {
                         </div>
                         <p class="text-muted">Префикс формируется автоматически по собственнику</p>
                     </div>
-                    <div class="form-group">
-                        <label>Система координат</label>
-                        <select id="coord-system-select" onchange="App.toggleCoordinateInputs()">
-                            <option value="wgs84" selected>WGS84 (широта/долгота)</option>
-                            <option value="msk86">МСК86 Зона 4 (X/Y)</option>
-                        </select>
-                    </div>
                     <div id="coords-wgs84-inputs">
                         <div class="form-group">
                             <label>Широта (WGS84)</label>
@@ -2258,16 +3400,6 @@ const App = {
                         <div class="form-group">
                             <label>Долгота (WGS84)</label>
                             <input type="number" name="longitude" step="0.000001" value="${lng || ''}" placeholder="37.123456">
-                        </div>
-                    </div>
-                    <div id="coords-msk86-inputs" style="display: none;">
-                        <div class="form-group">
-                            <label>X (МСК86)</label>
-                            <input type="number" name="x_msk86" step="0.01" placeholder="4500000.00">
-                        </div>
-                        <div class="form-group">
-                            <label>Y (МСК86)</label>
-                            <input type="number" name="y_msk86" step="0.01" placeholder="6100000.00">
                         </div>
                     </div>
                     <div class="form-group">
@@ -2301,13 +3433,6 @@ const App = {
                         <input type="text" id="modal-marker-number" value="СТ-<код>-<id>" disabled style="background: var(--bg-tertiary);">
                         <p class="text-muted">Номер формируется автоматически по собственнику и ID</p>
                     </div>
-                    <div class="form-group">
-                        <label>Система координат</label>
-                        <select id="coord-system-select" onchange="App.toggleCoordinateInputs()">
-                            <option value="wgs84" selected>WGS84 (широта/долгота)</option>
-                            <option value="msk86">МСК86 Зона 4 (X/Y)</option>
-                        </select>
-                    </div>
                     <div id="coords-wgs84-inputs">
                         <div class="form-group">
                             <label>Широта (WGS84)</label>
@@ -2316,16 +3441,6 @@ const App = {
                         <div class="form-group">
                             <label>Долгота (WGS84)</label>
                             <input type="number" name="longitude" step="0.000001" value="${lng || ''}" placeholder="37.123456">
-                        </div>
-                    </div>
-                    <div id="coords-msk86-inputs" style="display: none;">
-                        <div class="form-group">
-                            <label>X (МСК86)</label>
-                            <input type="number" name="x_msk86" step="0.01" placeholder="4500000.00">
-                        </div>
-                        <div class="form-group">
-                            <label>Y (МСК86)</label>
-                            <input type="number" name="y_msk86" step="0.01" placeholder="6100000.00">
                         </div>
                     </div>
                     <div class="form-group">
@@ -2371,8 +3486,16 @@ const App = {
                         <select name="end_well_id" required id="modal-end-well-select"></select>
                     </div>
                     <div class="form-group">
+                        <label>Количество каналов</label>
+                        <input type="number" name="channel_count" min="1" max="16" value="1">
+                    </div>
+                    <div class="form-group">
                         <label>Собственник</label>
                         <select name="owner_id" id="modal-owner-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Состояние</label>
+                        <select name="status_id" id="modal-status-select"></select>
                     </div>
                     <div class="form-group" style="display: none;">
                         <label>Вид</label>
@@ -2380,7 +3503,7 @@ const App = {
                     </div>
                     <div class="form-group">
                         <label>Длина (м)</label>
-                        <input type="number" name="length_m" step="0.01">
+                        <input type="number" name="length_m" step="0.01" disabled style="background: var(--bg-tertiary);" placeholder="Авто-расчёт">
                     </div>
                     <div class="form-group">
                         <label>Примечания</label>
@@ -2482,13 +3605,6 @@ const App = {
                     <!-- Блок для кабелей в грунте и воздушных (координаты) -->
                     <div id="cable-geometry-block" style="display: none;">
                         <div class="form-group">
-                            <label>Система координат</label>
-                            <select id="cable-coord-system">
-                                <option value="wgs84">WGS84 (долгота, широта)</option>
-                                <option value="msk86">МСК86 Зона 4 (X, Y)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
                             <label>Координаты (точки ломаной)</label>
                             <div id="cable-coordinates-list"></div>
                             <button type="button" class="btn btn-sm btn-secondary" onclick="App.addCableCoordinate()">
@@ -2533,19 +3649,9 @@ const App = {
      * Переключение полей ввода координат
      */
     toggleCoordinateInputs() {
-        const coordSystem = document.getElementById('coord-system-select')?.value;
+        // MSK86 отключён. Оставлено для обратной совместимости.
         const wgs84Inputs = document.getElementById('coords-wgs84-inputs');
-        const msk86Inputs = document.getElementById('coords-msk86-inputs');
-        
-        if (wgs84Inputs && msk86Inputs) {
-            if (coordSystem === 'wgs84') {
-                wgs84Inputs.style.display = 'block';
-                msk86Inputs.style.display = 'none';
-            } else {
-                wgs84Inputs.style.display = 'none';
-                msk86Inputs.style.display = 'block';
-            }
-        }
+        if (wgs84Inputs) wgs84Inputs.style.display = 'block';
     },
 
     /**
@@ -2580,13 +3686,24 @@ const App = {
             const results = await Promise.all(promises);
             const [owners, types, kinds, statuses] = results;
             
+            const pickDefault = (selectEl) => {
+                if (!selectEl) return;
+                if (selectEl.value) return;
+                const opt = Array.from(selectEl.options).find(o => o?.dataset?.isDefault === '1' && o.value);
+                if (opt) {
+                    selectEl.value = opt.value;
+                    selectEl.dispatchEvent(new Event('change'));
+                }
+            };
+
             // Определяем код вида объекта из скрытого поля
             const objectTypeCode = document.querySelector('input[name="object_type_code"]')?.value;
 
             if (owners.success && document.getElementById('modal-owner-select')) {
                 document.getElementById('modal-owner-select').innerHTML = 
                     '<option value="">Выберите...</option>' +
-                    owners.data.map(o => `<option value="${o.id}" data-code="${o.code || ''}">${o.name}</option>`).join('');
+                    owners.data.map(o => `<option value="${o.id}" data-code="${o.code || ''}" data-is-default="${o.is_default ? 1 : 0}">${o.name}</option>`).join('');
+                pickDefault(document.getElementById('modal-owner-select'));
             }
 
             // Обновление префикса номера по выбранному собственнику
@@ -2598,12 +3715,13 @@ const App = {
                 const updatePrefix = () => {
                     const ownerCode = ownerSelect.selectedOptions?.[0]?.dataset?.code || '';
                     if (!ownerCode) return;
+                    const currentId = document.querySelector('#edit-object-form input[name="id"]')?.value || '<id>';
                     if (objectType === 'wells') {
                         if (prefixInput) prefixInput.value = `ККС-${ownerCode}-`;
                     } else if (objectType === 'markers') {
-                        if (markerNumberInput) markerNumberInput.value = `СТ-${ownerCode}-<id>`;
+                        if (markerNumberInput) markerNumberInput.value = `СТ-${ownerCode}-${currentId}`;
                     } else if (objectType === 'unified_cables') {
-                        if (cableNumberInput) cableNumberInput.value = `КАБ-${ownerCode}-<id>`;
+                        if (cableNumberInput) cableNumberInput.value = `КАБ-${ownerCode}-${currentId}`;
                     }
                 };
                 ownerSelect.onchange = updatePrefix;
@@ -2613,7 +3731,7 @@ const App = {
             if (types.success && document.getElementById('modal-type-select')) {
                 const typeSelect = document.getElementById('modal-type-select');
                 typeSelect.innerHTML = types.data.map(t => 
-                    `<option value="${t.id}" data-code="${t.code}">${t.name}</option>`
+                    `<option value="${t.id}" data-code="${t.code}" data-is-default="${t.is_default ? 1 : 0}">${t.name}</option>`
                 ).join('');
                 
                 // Автоматически выбираем вид объекта по коду
@@ -2624,27 +3742,48 @@ const App = {
                         // Обновляем список типов (kinds) для выбранного вида
                         this.filterKindsByType(matchingType.id, kinds.data);
                     }
+                } else {
+                    pickDefault(typeSelect);
                 }
             }
             
             if (kinds.success && document.getElementById('modal-kind-select')) {
                 // Сохраняем все типы для фильтрации
                 this.allKinds = kinds.data;
+                let kindsHandled = false;
                 
+                // Для "Каналы" (cable_channels) вид объекта в форме не выбирается —
+                // берём дефолтные типы в рамках object_types.code === 'channel'
+                if (objectType === 'channels' && !document.getElementById('modal-type-select')) {
+                    const channelType = (types?.data || []).find(t => t.code === 'channel');
+                    const channelTypeId = channelType?.id || null;
+                    const filtered = channelTypeId
+                        ? (kinds.data || []).filter(k => String(k.object_type_id) === String(channelTypeId))
+                        : (kinds.data || []);
+                    const kindSelect = document.getElementById('modal-kind-select');
+                    kindSelect.innerHTML = '<option value="">Выберите...</option>' +
+                        filtered.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
+                    pickDefault(kindSelect);
+                    kindsHandled = true;
+                }
+
                 // Если уже выбран вид, фильтруем типы
                 const typeSelect = document.getElementById('modal-type-select');
-                if (typeSelect && typeSelect.value) {
+                if (!kindsHandled && typeSelect && typeSelect.value) {
                     this.filterKindsByType(typeSelect.value, kinds.data);
-                } else {
+                } else if (!kindsHandled) {
                     document.getElementById('modal-kind-select').innerHTML = 
                         '<option value="">Выберите...</option>' +
-                        kinds.data.map(k => `<option value="${k.id}">${k.name}</option>`).join('');
+                        kinds.data.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
+                    pickDefault(document.getElementById('modal-kind-select'));
                 }
             }
             
             if (statuses.success && document.getElementById('modal-status-select')) {
                 document.getElementById('modal-status-select').innerHTML = 
-                    statuses.data.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+                    '<option value="">Выберите...</option>' +
+                    statuses.data.map(s => `<option value="${s.id}" data-is-default="${s.is_default ? 1 : 0}">${s.name}</option>`).join('');
+                pickDefault(document.getElementById('modal-status-select'));
             }
 
             // Контракты (для кабеля при редактировании)
@@ -2656,7 +3795,8 @@ const App = {
                 const cResp = results[idxContracts] || contractsResp;
                 if (cResp?.success) {
                     contractSelect.innerHTML = '<option value="">Не указан</option>' +
-                        cResp.data.map(c => `<option value="${c.id}">${c.number} — ${c.name}</option>`).join('');
+                        cResp.data.map(c => `<option value="${c.id}" data-is-default="${c.is_default ? 1 : 0}">${c.number} — ${c.name}</option>`).join('');
+                    pickDefault(contractSelect);
                 }
             }
 
@@ -2726,7 +3866,15 @@ const App = {
                 if (cableTypesResponse?.success && document.getElementById('modal-cable-type-select')) {
                     document.getElementById('modal-cable-type-select').innerHTML = 
                         '<option value="">Выберите тип...</option>' +
-                        cableTypesResponse.data.map(ct => `<option value="${ct.id}">${ct.name}</option>`).join('');
+                        cableTypesResponse.data.map(ct => `<option value="${ct.id}" data-is-default="${ct.is_default ? 1 : 0}">${ct.name}</option>`).join('');
+                    const sel = document.getElementById('modal-cable-type-select');
+                    if (sel && !sel.value) {
+                        const def = (cableTypesResponse.data || []).find(ct => ct.is_default);
+                        if (def) {
+                            sel.value = String(def.id);
+                            this.onCableTypeChange().catch(() => {});
+                        }
+                    }
                 }
                 
                 // Виды объектов для кабелей
@@ -2757,7 +3905,13 @@ const App = {
         );
         
         kindSelect.innerHTML = '<option value="">Выберите...</option>' +
-            filteredKinds.map(k => `<option value="${k.id}">${k.name}</option>`).join('');
+            filteredKinds.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
+
+        // Автовыбор значения по умолчанию (если ничего не выбрано)
+        if (!kindSelect.value) {
+            const def = filteredKinds.find(k => k.is_default);
+            if (def) kindSelect.value = String(def.id);
+        }
     },
 
     /**
@@ -2822,7 +3976,7 @@ const App = {
                             return;
                         }
                         data.coordinates = coordinates;
-                        data.coordinate_system = document.getElementById('cable-coord-system')?.value || 'wgs84';
+                        data.coordinate_system = 'wgs84';
                     } else if (objectTypeCode === 'cable_duct') {
                         // Для кабелей в канализации - собираем маршрут
                         const channelsSelect = document.getElementById('cable-route-channels');
@@ -2848,10 +4002,104 @@ const App = {
     },
 
     /**
-     * Экспорт объектов
+     * Выгрузка объектов (CSV) с выбором разделителя
      */
     exportObjects() {
-        window.open(`/api/wells/export?token=${API.getToken()}`, '_blank');
+        this.showObjectsExportModal();
+    },
+
+    showCsvDelimiterModal(title, onConfirm) {
+        this._pendingCsvExport = onConfirm;
+        const content = `
+            <div class="form-group">
+                <label>Разделитель столбцов</label>
+                <select id="csv-export-delimiter">
+                    <option value=";">Точка с запятой ( ; )</option>
+                    <option value=",">Запятая ( , )</option>
+                    <option value="tab">Табуляция (TAB)</option>
+                    <option value="|">Вертикальная черта ( | )</option>
+                </select>
+                <p class="text-muted" style="margin-top:8px;">Файл будет скачан в формате CSV с выбранным разделителем.</p>
+            </div>
+        `;
+        const footer = `
+            <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+            <button class="btn btn-primary" onclick="App.confirmCsvDelimiter()">Выгрузить</button>
+        `;
+        this.showModal(title, content, footer);
+    },
+
+    async confirmCsvDelimiter() {
+        const sel = document.getElementById('csv-export-delimiter');
+        const delimiter = sel?.value || ';';
+        const fn = this._pendingCsvExport;
+        this._pendingCsvExport = null;
+        this.hideModal();
+        if (typeof fn !== 'function') return;
+        try {
+            await fn(delimiter);
+            this.notify('Файл выгружен', 'success');
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка выгрузки', 'error');
+        }
+    },
+
+    showReportExportModal(type) {
+        // В отчёте по инцидентам кнопки выгрузки нет по ТЗ
+        if (type === 'incidents') {
+            this.notify('Выгрузка для отчёта по инцидентам отключена', 'info');
+            return;
+        }
+
+        this.showCsvDelimiterModal('Выгрузить отчет', (delimiter) => {
+            const params = {};
+
+            if (type === 'objects') {
+                const ownerId = document.getElementById('report-objects-owner')?.value || '';
+                if (ownerId) params.owner_id = ownerId;
+            }
+            if (type === 'contracts') {
+                const contractId = document.getElementById('report-contracts-contract')?.value || '';
+                if (contractId) params.contract_id = contractId;
+            }
+
+            return API.reports.export(type, params, delimiter);
+        });
+    },
+
+    showObjectsExportModal() {
+        this.showCsvDelimiterModal('Выгрузить', (delimiter) => this.exportCurrentObjects(delimiter));
+    },
+
+    exportCurrentObjects(delimiter) {
+        const search = document.getElementById('search-objects')?.value?.trim() || '';
+        const params = {};
+        if (search) params.search = search;
+        params.delimiter = delimiter;
+
+        switch (this.currentTab) {
+            case 'wells':
+                return API.download('/wells/export', params);
+            case 'directions':
+                return API.download('/channel-directions/export', params);
+            case 'channels':
+                return API.download('/cable-channels/export', params);
+            case 'markers':
+                return API.download('/marker-posts/export', params);
+            case 'unified_cables': {
+                const ot = document.getElementById('cables-filter-object-type')?.value;
+                const owner = document.getElementById('cables-filter-owner')?.value;
+                const contract = document.getElementById('cables-filter-contract')?.value;
+                if (ot) params.object_type_id = ot;
+                if (owner) params.owner_id = owner;
+                if (contract) params.contract_id = contract;
+                return API.download('/unified-cables/export', params);
+            }
+            case 'groups':
+                return API.download('/groups/export', params);
+            default:
+                return API.download('/wells/export', params);
+        }
     },
 
     /**
@@ -2875,12 +4123,20 @@ const App = {
                     <input type="text" value="${endWell.number}" disabled style="background: var(--bg-tertiary);">
                 </div>
                 <div class="form-group">
+                    <label>Количество каналов</label>
+                    <input type="number" name="channel_count" min="1" max="16" value="1">
+                </div>
+                <div class="form-group">
                     <label>Собственник</label>
                     <select name="owner_id" id="modal-owner-select"></select>
                 </div>
                 <div class="form-group">
+                    <label>Состояние</label>
+                    <select name="status_id" id="modal-status-select"></select>
+                </div>
+                <div class="form-group">
                     <label>Длина (м)</label>
-                    <input type="number" name="length_m" step="0.01" placeholder="Авто-расчёт по координатам">
+                    <input type="number" name="length_m" step="0.01" disabled style="background: var(--bg-tertiary);" placeholder="Авто-расчёт по координатам">
                 </div>
                 <div class="form-group">
                     <label>Примечания</label>
@@ -2920,8 +4176,6 @@ const App = {
         }
 
         // Заполняем координаты (WGS84: lon/lat)
-        const coordSystemSelect = document.getElementById('cable-coord-system');
-        if (coordSystemSelect) coordSystemSelect.value = 'wgs84';
         const container = document.getElementById('cable-coordinates-list');
         if (container) {
             container.innerHTML = '';
@@ -3030,6 +4284,73 @@ const App = {
         }
     },
 
+    async increaseDirectionChannels(directionId, currentCount = null) {
+        try {
+            // Если currentCount не передан — подгружаем направление
+            let current = (currentCount !== null && currentCount !== undefined) ? parseInt(currentCount) : null;
+            if (current === null || Number.isNaN(current)) {
+                const resp = await API.channelDirections.get(directionId);
+                const dir = resp.data || resp;
+                current = (dir.channels || []).length;
+            }
+
+            const content = `
+                <div class="form-group">
+                    <label>Текущее количество каналов</label>
+                    <input type="number" value="${current}" disabled style="background: var(--bg-tertiary);">
+                </div>
+                <div class="form-group">
+                    <label>Новое количество каналов (только увеличение)</label>
+                    <input type="number" id="increase-direction-target" min="${Math.min(16, current + 1)}" max="16" value="${Math.min(16, current + 1)}">
+                    <p class="text-muted">Будут созданы новые каналы со значениями по умолчанию. Максимум 16.</p>
+                </div>
+            `;
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="App.confirmIncreaseDirectionChannels(${directionId}, ${current})">Увеличить</button>
+            `;
+            this.showModal('Увеличить количество каналов', content, footer);
+        } catch (e) {
+            this.notify('Ошибка загрузки направления', 'error');
+        }
+    },
+
+    async confirmIncreaseDirectionChannels(directionId, current) {
+        const input = document.getElementById('increase-direction-target');
+        const target = parseInt(input?.value);
+        if (!target || Number.isNaN(target)) {
+            this.notify('Введите корректное количество', 'error');
+            return;
+        }
+        if (target <= current) {
+            this.notify('Можно только увеличить количество каналов', 'warning');
+            return;
+        }
+        if (target > 16) {
+            this.notify('Максимум 16 каналов', 'warning');
+            return;
+        }
+        if (!confirm(`Увеличить количество каналов с ${current} до ${target}?`)) return;
+
+        try {
+            const resp = await API.channelDirections.ensureChannelCount(directionId, target);
+            if (resp?.success === false) {
+                this.notify(resp.message || 'Ошибка', 'error');
+                return;
+            }
+            this.hideModal();
+            this.notify('Каналы добавлены', 'success');
+            // Обновляем слой направлений (там отображается счетчик каналов)
+            if (window.MapManager && typeof window.MapManager.loadChannelDirections === 'function') {
+                window.MapManager.loadChannelDirections();
+            } else if (window.MapManager && typeof window.MapManager.loadAllLayers === 'function') {
+                window.MapManager.loadAllLayers();
+            }
+        } catch (e) {
+            this.notify(e.message || 'Ошибка увеличения количества каналов', 'error');
+        }
+    },
+
     async showCablesForChannel(channelId) {
         try {
             const resp = await API.unifiedCables.byChannel(channelId);
@@ -3127,7 +4448,13 @@ const App = {
                     : response.data;
                 
                 catalogSelect.innerHTML = '<option value="">Выберите марку кабеля...</option>' +
-                    filteredCables.map(c => `<option value="${c.id}">${c.marking} (${c.fiber_count} жил)</option>`).join('');
+                    filteredCables.map(c => `<option value="${c.id}" data-is-default="${c.is_default ? 1 : 0}">${c.marking} (${c.fiber_count} жил)</option>`).join('');
+
+                // Автовыбор значения по умолчанию (если ничего не выбрано / новая запись)
+                if (!catalogSelect.value) {
+                    const def = (filteredCables || []).find(c => c.is_default);
+                    if (def) catalogSelect.value = String(def.id);
+                }
             }
         } catch (error) {
             catalogSelect.innerHTML = '<option value="">Ошибка загрузки</option>';
@@ -3194,68 +4521,321 @@ const App = {
     },
 
     /**
-     * Модальное окно импорта
+     * Модальное окно "Загрузить" (импорт колодцев из текста)
      */
     showImportModal() {
+        if (this.currentTab !== 'wells') {
+            this.notify('Загрузка доступна только для объекта "Колодцы"', 'info');
+            return;
+        }
+        if (!this.canWrite()) {
+            this.notify('Недостаточно прав для загрузки', 'error');
+            return;
+        }
+
         const content = `
-            <form id="import-form">
-                <div class="form-group">
-                    <label>Тип объекта</label>
-                    <select name="target_table" required>
-                        <option value="wells">Колодцы</option>
-                        <option value="marker_posts">Столбики</option>
-                        <option value="ground_cables">Кабели в грунте</option>
-                        <option value="aerial_cables">Воздушные кабели</option>
-                    </select>
+            <div style="display:grid; gap: 12px;">
+                <div style="display:flex; gap: 10px; flex-wrap: wrap; align-items: end;">
+                    <div class="form-group" style="min-width: 220px;">
+                        <label>Система координат</label>
+                        <select id="well-import-coord-system" disabled>
+                            <option value="wgs84" selected>WGS84 (longitude/latitude)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="min-width: 220px;">
+                        <label>Разделитель</label>
+                        <select id="well-import-delimiter">
+                            <option value=";" selected>;</option>
+                            <option value=",">,</option>
+                            <option value="tab">TAB</option>
+                            <option value="|">|</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="min-width: 260px;">
+                        <label>Собственник *</label>
+                        <select id="well-import-owner"></select>
+                    </div>
+                    <div class="form-group" style="min-width: 240px;">
+                        <label>Тип *</label>
+                        <select id="well-import-kind"></select>
+                    </div>
+                    <div class="form-group" style="min-width: 240px;">
+                        <label>Состояние *</label>
+                        <select id="well-import-status"></select>
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <button class="btn btn-secondary" type="button" onclick="App.previewWellTextImport()">
+                            <i class="fas fa-eye"></i> Предпросмотр
+                        </button>
+                    </div>
                 </div>
+
                 <div class="form-group">
-                    <label>Файл CSV</label>
-                    <input type="file" name="file" accept=".csv" required>
+                    <label>Данные (многострочный текст)</label>
+                    <textarea id="well-import-text" rows="10" placeholder="Вставьте строки. Каждая строка — 1 колодец."></textarea>
+                    <p class="text-muted" style="margin-top:6px;">
+                        Ниже появится предпросмотр и сопоставление колонок полям. Поле "Система координат" отдельно — вверху (по умолчанию WGS84).
+                    </p>
                 </div>
-                <div class="form-group">
-                    <label>Система координат</label>
-                    <select name="coordinate_system">
-                        <option value="wgs84">WGS84 (долгота, широта)</option>
-                        <option value="msk86">МСК86 Зона 4 (X, Y)</option>
-                    </select>
-                </div>
-            </form>
-            <div id="import-preview" class="hidden" style="margin-top: 16px;"></div>
+
+                <div id="well-import-preview" class="hidden"></div>
+                <div id="well-import-mapping" class="hidden"></div>
+                <div id="well-import-result" class="hidden"></div>
+            </div>
         `;
 
         const footer = `
             <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
-            <button class="btn btn-primary" onclick="App.previewImport()">Предпросмотр</button>
+            <button class="btn btn-primary" onclick="App.executeWellTextImport()">Загрузить</button>
         `;
 
-        this.showModal('Импорт данных', content, footer);
+        this.showModal('Загрузить: колодцы', content, footer);
+
+        // Загружаем справочники (owner/kind/status) как в форме "Добавить колодец"
+        this.loadWellImportSelects().catch(() => {});
+
+        // Автопредпросмотр с задержкой
+        setTimeout(() => {
+            const ta = document.getElementById('well-import-text');
+            const del = document.getElementById('well-import-delimiter');
+            const owner = document.getElementById('well-import-owner');
+            const kind = document.getElementById('well-import-kind');
+            const status = document.getElementById('well-import-status');
+            const handler = () => this.scheduleWellImportPreview();
+            ta?.addEventListener('input', handler);
+            del?.addEventListener('change', handler);
+            owner?.addEventListener('change', handler);
+            kind?.addEventListener('change', handler);
+            status?.addEventListener('change', handler);
+        }, 0);
+    },
+
+    async loadWellImportSelects() {
+        const ownerSelect = document.getElementById('well-import-owner');
+        const kindSelect = document.getElementById('well-import-kind');
+        const statusSelect = document.getElementById('well-import-status');
+        if (!ownerSelect || !kindSelect || !statusSelect) return;
+
+        ownerSelect.innerHTML = '<option value="">Загрузка...</option>';
+        kindSelect.innerHTML = '<option value="">Загрузка...</option>';
+        statusSelect.innerHTML = '<option value="">Загрузка...</option>';
+
+        try {
+            const [owners, types, kinds, statuses] = await Promise.all([
+                API.references.all('owners'),
+                API.references.all('object_types'),
+                API.references.all('object_kinds'),
+                API.references.all('object_status'),
+            ]);
+
+            const ownersData = owners?.data || [];
+            ownerSelect.innerHTML = '<option value="">Выберите...</option>' +
+                ownersData.map(o => `<option value="${o.id}" data-code="${o.code || ''}" data-is-default="${o.is_default ? 1 : 0}">${o.name}</option>`).join('');
+            const ownerDefault = ownersData.find(o => o.is_default);
+            if (ownerDefault) ownerSelect.value = String(ownerDefault.id);
+
+            // type_id для колодцев определяется системным кодом "well"
+            const typesData = types?.data || [];
+            const wellType = typesData.find(t => t.code === 'well');
+            this._wellImportTypeId = wellType?.id || null;
+
+            const kindsData = kinds?.data || [];
+            const filteredKinds = this._wellImportTypeId
+                ? kindsData.filter(k => String(k.object_type_id) === String(this._wellImportTypeId))
+                : kindsData;
+
+            kindSelect.innerHTML = '<option value="">Выберите...</option>' +
+                filteredKinds.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
+            const kindDefault = filteredKinds.find(k => k.is_default);
+            if (kindDefault) kindSelect.value = String(kindDefault.id);
+
+            const statusData = statuses?.data || [];
+            statusSelect.innerHTML = '<option value="">Выберите...</option>' +
+                statusData.map(s => `<option value="${s.id}" data-is-default="${s.is_default ? 1 : 0}">${s.name}</option>`).join('');
+            const statusDefault = statusData.find(s => s.is_default);
+            if (statusDefault) statusSelect.value = String(statusDefault.id);
+        } catch (e) {
+            ownerSelect.innerHTML = '<option value="">Ошибка загрузки</option>';
+            kindSelect.innerHTML = '<option value="">Ошибка загрузки</option>';
+            statusSelect.innerHTML = '<option value="">Ошибка загрузки</option>';
+        }
     },
 
     /**
-     * Предпросмотр импорта
+     * Debounce предпросмотра
      */
-    async previewImport() {
-        const form = document.getElementById('import-form');
-        const file = form.querySelector('input[name="file"]').files[0];
-        
-        if (!file) {
-            this.notify('Выберите файл', 'warning');
+    scheduleWellImportPreview() {
+        clearTimeout(this._wellImportPreviewTimer);
+        this._wellImportPreviewTimer = setTimeout(() => this.previewWellTextImport(), 300);
+    },
+
+    async previewWellTextImport() {
+        const text = document.getElementById('well-import-text')?.value || '';
+        const delimiter = document.getElementById('well-import-delimiter')?.value || ';';
+
+        const previewEl = document.getElementById('well-import-preview');
+        const mappingEl = document.getElementById('well-import-mapping');
+        const resultEl = document.getElementById('well-import-result');
+        if (resultEl) resultEl.classList.add('hidden');
+
+        if (!previewEl || !mappingEl) return;
+        if (!text.trim()) {
+            previewEl.classList.add('hidden');
+            mappingEl.classList.add('hidden');
             return;
         }
 
         try {
-            const response = await API.import.previewCsv(file);
-            if (response.success) {
-                const preview = document.getElementById('import-preview');
-                preview.classList.remove('hidden');
-                preview.innerHTML = `
-                    <p>Найдено ${response.data.total_rows} записей</p>
-                    <p>Колонки: ${response.data.headers.join(', ')}</p>
-                    <button class="btn btn-success" onclick="App.executeImport()">Выполнить импорт</button>
+            const resp = await API.wells.importTextPreview(text, delimiter);
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка предпросмотра', 'error');
+                return;
+            }
+
+            const data = resp.data || {};
+            const rows = data.preview || [];
+            const maxCols = data.max_columns || 0;
+            const total = data.total_lines || 0;
+            const fields = ['number', 'latitude', 'longitude'];
+
+            const fieldLabels = {
+                number: 'Номер',
+                latitude: 'Широта',
+                longitude: 'Долгота',
+            };
+
+            this._wellImportMaxCols = maxCols;
+            this._wellImportFields = fields;
+            this._wellImportTotalLines = total;
+
+            previewEl.classList.remove('hidden');
+            previewEl.innerHTML = `
+                <div style="margin-top: 6px;">
+                    <strong>Предпросмотр:</strong>
+                    <span class="text-muted">(строк: ${total}, колонок (макс): ${maxCols})</span>
+                </div>
+                <div style="max-height: 220px; overflow:auto; border: 1px solid var(--border-color); border-radius: 8px; margin-top: 8px;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr>
+                                ${Array.from({ length: maxCols }).map((_, i) => `<th style="text-align:left; padding:6px 8px; border-bottom:1px solid var(--border-color);">#${i + 1}</th>`).join('')}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map((r, idx) => `
+                                <tr>
+                                    ${Array.from({ length: maxCols }).map((_, i) => `<td style="padding:6px 8px; border-bottom:1px solid var(--border-color);">${this.escapeHtml(r?.[i] ?? '')}</td>`).join('')}
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            mappingEl.classList.remove('hidden');
+            mappingEl.innerHTML = `
+                <div style="margin-top: 10px;">
+                    <strong>Сопоставление колонок</strong>
+                    <p class="text-muted" style="margin-top:6px;">Выберите, какая колонка соответствует какому полю (можно не использовать колонку).</p>
+                </div>
+                <div style="display:grid; gap: 8px;">
+                    ${Array.from({ length: maxCols }).map((_, i) => `
+                        <div style="display:flex; gap: 10px; align-items:center;">
+                            <div style="min-width: 90px;"><strong>#${i + 1}</strong></div>
+                            <select id="well-import-map-${i}" style="flex: 1;">
+                                <option value="ignore">Не использовать</option>
+                                ${fields.map(f => `<option value="${f}">${fieldLabels[f] || f}</option>`).join('')}
+                            </select>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка предпросмотра', 'error');
+        }
+    },
+
+    collectWellImportMapping() {
+        const maxCols = this._wellImportMaxCols || 0;
+        const mapping = {};
+        const used = new Map();
+        for (let i = 0; i < maxCols; i++) {
+            const val = document.getElementById(`well-import-map-${i}`)?.value || 'ignore';
+            if (!val || val === 'ignore') continue;
+            if (used.has(val)) {
+                throw new Error(`Поле "${val}" выбрано более одного раза (колонки #${used.get(val) + 1} и #${i + 1})`);
+            }
+            used.set(val, i);
+            mapping[i] = val;
+        }
+        return mapping;
+    },
+
+    async executeWellTextImport() {
+        const text = document.getElementById('well-import-text')?.value || '';
+        const delimiter = document.getElementById('well-import-delimiter')?.value || ';';
+        const coordSystem = 'wgs84';
+        const resultEl = document.getElementById('well-import-result');
+        const ownerId = document.getElementById('well-import-owner')?.value || '';
+        const kindId = document.getElementById('well-import-kind')?.value || '';
+        const statusId = document.getElementById('well-import-status')?.value || '';
+
+        if (!text.trim()) {
+            this.notify('Вставьте данные для загрузки', 'warning');
+            return;
+        }
+
+        if (!ownerId || !kindId || !statusId) {
+            this.notify('Выберите Собственник, Тип и Состояние', 'warning');
+            return;
+        }
+
+        let mapping;
+        try {
+            mapping = this.collectWellImportMapping();
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка сопоставления колонок', 'error');
+            return;
+        }
+
+        try {
+            const resp = await API.wells.importText(text, delimiter, mapping, coordSystem, {
+                default_owner_id: parseInt(ownerId),
+                default_kind_id: parseInt(kindId),
+                default_status_id: parseInt(statusId),
+            });
+            if (!resp?.success) {
+                this.notify(resp?.message || 'Ошибка загрузки', 'error');
+                return;
+            }
+
+            const data = resp.data || {};
+            const imported = data.imported || 0;
+            const errors = data.errors || [];
+
+            if (resultEl) {
+                resultEl.classList.remove('hidden');
+                resultEl.innerHTML = `
+                    <div style="margin-top: 10px;">
+                        <strong>Результат:</strong> импортировано <strong>${imported}</strong>
+                    </div>
+                    ${errors.length ? `
+                        <div style="margin-top: 8px;">
+                            <strong>Ошибки (${errors.length}):</strong>
+                            <div style="max-height: 180px; overflow:auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; margin-top: 6px;">
+                                ${errors.slice(0, 200).map(e => `<div class="text-muted">Строка ${e.line}: ${this.escapeHtml(e.error)}</div>`).join('')}
+                                ${errors.length > 200 ? `<div class="text-muted">... и ещё ${errors.length - 200}</div>` : ''}
+                            </div>
+                        </div>
+                    ` : '<div class="text-muted" style="margin-top:8px;">Ошибок нет.</div>'}
                 `;
             }
-        } catch (error) {
-            this.notify('Ошибка чтения файла', 'error');
+
+            this.notify(`Загрузка завершена: ${imported}`, 'success');
+            this.loadObjects();
+            MapManager.loadAllLayers();
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка загрузки', 'error');
         }
     },
 
@@ -3540,12 +5120,12 @@ const App = {
         const content = `
             <form id="user-form">
                 <div class="form-group">
-                    <label>Логин *</label>
-                    <input type="text" name="login" required>
+                    <label>Логин * (3–100 символов, уникальный)</label>
+                    <input type="text" name="login" required minlength="3" maxlength="100" autocomplete="username">
                 </div>
                 <div class="form-group">
-                    <label>Пароль *</label>
-                    <input type="password" name="password" required>
+                    <label>Пароль * (мин. 6 символов)</label>
+                    <input type="password" name="password" required minlength="6" autocomplete="new-password">
                 </div>
                 <div class="form-group">
                     <label>Полное имя</label>
@@ -3553,10 +5133,10 @@ const App = {
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" name="email">
+                    <input type="email" name="email" placeholder="name@example.com">
                 </div>
                 <div class="form-group">
-                    <label>Роль *</label>
+                    <label>Роль * (обязательно)</label>
                     <select name="role_id" required id="user-role-select"></select>
                 </div>
             </form>
@@ -3574,12 +5154,15 @@ const App = {
     /**
      * Загрузка ролей в селект
      */
-    async loadRolesSelect() {
+    async loadRolesSelect(selectId = 'user-role-select', selectedRoleCode = null) {
         try {
             const response = await API.users.roles();
             if (response.success) {
-                document.getElementById('user-role-select').innerHTML = 
-                    response.data.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+                const select = document.getElementById(selectId);
+                if (!select) return;
+                select.innerHTML = response.data
+                    .map(r => `<option value="${r.id}" ${selectedRoleCode && r.code === selectedRoleCode ? 'selected' : ''}>${r.name}</option>`)
+                    .join('');
             }
         } catch (error) {
             console.error('Ошибка загрузки ролей:', error);
@@ -3612,11 +5195,21 @@ const App = {
      * Получить форму для справочника по типу
      */
     getReferenceForm(type, data = {}) {
+        const defaultBlock = `
+            <div class="form-group" style="margin-top: 8px;">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <input type="checkbox" name="is_default" ${data.is_default ? 'checked' : ''}>
+                    По умолчанию
+                </label>
+                <p class="text-muted">Можно выбрать только одно значение по умолчанию в справочнике (для "Типов" — в рамках "Вида объекта").</p>
+            </div>
+        `;
+
         const forms = {
             'object_types': `
                 <div class="form-group">
                     <label>Код *</label>
-                    <input type="text" name="code" value="${data.code || ''}" required ${data.id ? 'readonly' : ''}>
+                    <input type="text" name="code" value="${data.code || ''}" required ${data.id ? 'disabled style="background: var(--bg-tertiary);"' : ''}>
                 </div>
                 <div class="form-group">
                     <label>Название *</label>
@@ -3629,6 +5222,7 @@ const App = {
                 <div class="form-group">
                     <label>Иконка</label>
                     <input type="text" name="icon" value="${data.icon || ''}" placeholder="circle, line, marker...">
+                    <p class="text-muted">Иконки: Font Awesome 6 (solid). Примеры: map-marker-alt, project-diagram, wave-square, broadcast-tower, route, tag.</p>
                 </div>
                 <div class="form-group">
                     <label>Цвет</label>
@@ -3652,6 +5246,7 @@ const App = {
                     <label>Описание</label>
                     <textarea name="description" rows="2">${data.description || ''}</textarea>
                 </div>
+                ${defaultBlock}
             `,
             'object_status': `
                 <div class="form-group">
@@ -3674,11 +5269,12 @@ const App = {
                     <label>Порядок сортировки</label>
                     <input type="number" name="sort_order" value="${data.sort_order || 0}">
                 </div>
+                ${defaultBlock}
             `,
             'owners': `
                 <div class="form-group">
                     <label>Код *</label>
-                    <input type="text" name="code" value="${data.code || ''}" required>
+                    <input type="text" name="code" value="${data.code || ''}" required ${data.id ? 'readonly style="background: var(--bg-tertiary);"' : ''}>
                 </div>
                 <div class="form-group">
                     <label>Название *</label>
@@ -3712,6 +5308,7 @@ const App = {
                     <label>Примечания</label>
                     <textarea name="notes" rows="2">${data.notes || ''}</textarea>
                 </div>
+                ${defaultBlock}
             `,
             'contracts': `
                 <div class="form-group">
@@ -3723,8 +5320,12 @@ const App = {
                     <input type="text" name="name" value="${data.name || ''}" required>
                 </div>
                 <div class="form-group">
-                    <label>Собственник</label>
+                    <label>Арендатор</label>
                     <select name="owner_id" id="ref-owner-select" data-value="${data.owner_id || ''}"></select>
+                </div>
+                <div class="form-group">
+                    <label>Арендодатель</label>
+                    <select name="landlord_id" id="ref-landlord-select" data-value="${data.landlord_id || ''}"></select>
                 </div>
                 <div class="form-group">
                     <label>Дата начала</label>
@@ -3750,6 +5351,7 @@ const App = {
                     <label>Примечания</label>
                     <textarea name="notes" rows="2">${data.notes || ''}</textarea>
                 </div>
+                ${defaultBlock}
             `,
             'cable_types': `
                 <div class="form-group">
@@ -3764,6 +5366,7 @@ const App = {
                     <label>Описание</label>
                     <textarea name="description" rows="2">${data.description || ''}</textarea>
                 </div>
+                ${defaultBlock}
             `,
             'cable_catalog': `
                 <div class="form-group">
@@ -3782,6 +5385,7 @@ const App = {
                     <label>Описание</label>
                     <textarea name="description" rows="2">${data.description || ''}</textarea>
                 </div>
+                ${defaultBlock}
             `,
         };
         
@@ -3839,11 +5443,8 @@ const App = {
             this.showModal('Редактировать запись', content, footer);
 
             // Системные виды объектов не удаляем (скрываем кнопку)
-            if (this.currentReference === 'object_types') {
-                const systemCodes = new Set(['well', 'channel', 'marker', 'cable_ground', 'cable_aerial', 'cable_duct']);
-                if (systemCodes.has(data?.code)) {
-                    document.getElementById('btn-delete-ref')?.classList.add('hidden');
-                }
+        if (this.currentReference === 'object_types' || !this.isAdmin()) {
+                document.getElementById('btn-delete-ref')?.classList.add('hidden');
             }
             
             // Загружаем связанные справочники
@@ -3851,7 +5452,7 @@ const App = {
             
             // Устанавливаем значения селектов
             setTimeout(() => {
-                const selects = ['ref-object-type-select', 'ref-owner-select', 'ref-cable-type-select'];
+                const selects = ['ref-object-type-select', 'ref-owner-select', 'ref-landlord-select', 'ref-cable-type-select'];
                 selects.forEach(selectId => {
                     const select = document.getElementById(selectId);
                     if (select && select.dataset.value) {
@@ -3876,21 +5477,41 @@ const App = {
                 if (types.success) {
                     objectTypeSelect.innerHTML = '<option value="">Не указан</option>' +
                         types.data.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+                    const defaultType = (types.data || []).find(t => t.is_default);
                     if (objectTypeSelect.dataset.value) {
                         objectTypeSelect.value = objectTypeSelect.dataset.value;
+                    } else if (defaultType) {
+                        objectTypeSelect.value = String(defaultType.id);
                     }
                 }
             }
             
             // Собственники
             const ownerSelect = document.getElementById('ref-owner-select');
+            const landlordSelect = document.getElementById('ref-landlord-select');
             if (ownerSelect) {
                 const owners = await API.references.all('owners');
                 if (owners.success) {
                     ownerSelect.innerHTML = '<option value="">Не указан</option>' +
                         owners.data.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+                    const defaultOwner = (owners.data || []).find(o => o.is_default);
                     if (ownerSelect.dataset.value) {
                         ownerSelect.value = ownerSelect.dataset.value;
+                    } else if (defaultOwner) {
+                        ownerSelect.value = String(defaultOwner.id);
+                    }
+                }
+            }
+            if (landlordSelect) {
+                const owners = await API.references.all('owners');
+                if (owners.success) {
+                    landlordSelect.innerHTML = '<option value="">Не указан</option>' +
+                        owners.data.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+                    const defaultOwner = (owners.data || []).find(o => o.is_default);
+                    if (landlordSelect.dataset.value) {
+                        landlordSelect.value = landlordSelect.dataset.value;
+                    } else if (defaultOwner) {
+                        landlordSelect.value = String(defaultOwner.id);
                     }
                 }
             }
@@ -3902,8 +5523,11 @@ const App = {
                 if (cableTypes.success) {
                     cableTypeSelect.innerHTML = '<option value="">Выберите тип</option>' +
                         cableTypes.data.map(ct => `<option value="${ct.id}">${ct.name}</option>`).join('');
+                    const defaultCableType = (cableTypes.data || []).find(ct => ct.is_default);
                     if (cableTypeSelect.dataset.value) {
                         cableTypeSelect.value = cableTypeSelect.dataset.value;
+                    } else if (defaultCableType) {
+                        cableTypeSelect.value = String(defaultCableType.id);
                     }
                 }
             }
@@ -3920,15 +5544,22 @@ const App = {
         const formData = new FormData(form);
         const data = Object.fromEntries(formData.entries());
         
-        // Обработка чекбоксов
-        data.is_default = form.querySelector('input[name="is_default"]')?.checked ? true : false;
+        // Обработка чекбоксов (только если поле есть в форме)
+        const isDefaultCheckbox = form.querySelector('input[name="is_default"]');
+        if (isDefaultCheckbox !== null) {
+            data.is_default = isDefaultCheckbox.checked ? true : false;
+        }
 
         try {
             const response = await API.references.create(this.currentReference, data);
             if (response.success) {
                 this.hideModal();
                 this.notify('Запись создана', 'success');
-                this.showReference(this.currentReference);
+                if (this.currentPanel === 'contracts' && this.currentReference === 'contracts') {
+                    this.loadContractsPanel();
+                } else {
+                    this.showReference(this.currentReference);
+                }
             } else {
                 this.notify(response.message || 'Ошибка', 'error');
             }
@@ -3957,7 +5588,11 @@ const App = {
             if (response.success) {
                 this.hideModal();
                 this.notify('Запись обновлена', 'success');
-                this.showReference(this.currentReference);
+                if (this.currentPanel === 'contracts' && this.currentReference === 'contracts') {
+                    this.loadContractsPanel();
+                } else {
+                    this.showReference(this.currentReference);
+                }
                 if (this.currentReference === 'object_types') {
                     this.refreshObjectTypeColors(true).catch(() => {});
                 }
@@ -4229,6 +5864,38 @@ const App = {
     },
 
     showIncidentModal(incident) {
+        const photosHtml = (incident.photos || []).length ? `
+            <div>
+                <strong>Фотографии:</strong>
+                <ul style="margin-top:6px;">
+                    ${(incident.photos || []).map(p => `
+                        <li style="margin-bottom:6px;">
+                            <a href="${p.url || '#'}" target="_blank" download="${this.escapeHtml(p.original_filename || 'photo')}" rel="noopener">
+                                ${this.escapeHtml(p.original_filename || p.filename || 'Файл')}
+                            </a>
+                            ${p.description ? `<div class="text-muted" style="margin-top:2px;">${this.escapeHtml(p.description)}</div>` : ''}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        ` : '';
+
+        const docsHtml = (incident.documents || []).length ? `
+            <div>
+                <strong>Документы:</strong>
+                <ul style="margin-top:6px;">
+                    ${(incident.documents || []).map(d => `
+                        <li style="margin-bottom:6px;">
+                            <a href="${d.url || '#'}" target="_blank" download="${this.escapeHtml(d.original_filename || 'document')}" rel="noopener">
+                                ${this.escapeHtml(d.original_filename || d.filename || 'Файл')}
+                            </a>
+                            ${d.description ? `<div class="text-muted" style="margin-top:2px;">${this.escapeHtml(d.description)}</div>` : ''}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        ` : '';
+
         const content = `
             <div style="display: grid; gap: 12px;">
                 <div><strong>Номер:</strong> ${incident.number}</div>
@@ -4238,6 +5905,8 @@ const App = {
                 <div><strong>Описание:</strong> ${incident.description || '-'}</div>
                 <div><strong>Виновник:</strong> ${incident.culprit || '-'}</div>
                 <div><strong>Создал:</strong> ${incident.created_by_name || incident.created_by_login}</div>
+                ${photosHtml}
+                ${docsHtml}
                 ${incident.related_objects?.length ? `
                     <div><strong>Связанные объекты:</strong>
                         <ul>
@@ -4257,12 +5926,16 @@ const App = {
 
         const footer = `
             <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
-            <button class="btn btn-danger" onclick="App.deleteIncident(${incident.id})" style="margin-left:auto;">
-                <i class="fas fa-trash"></i> Удалить
-            </button>
-            <button class="btn btn-primary" onclick="App.editIncident(${incident.id})">
-                <i class="fas fa-edit"></i> Редактировать
-            </button>
+            ${this.canDelete() ? `
+                <button class="btn btn-danger" onclick="App.deleteIncident(${incident.id})" style="margin-left:auto;">
+                    <i class="fas fa-trash"></i> Удалить
+                </button>
+            ` : ''}
+            ${this.canWrite() ? `
+                <button class="btn btn-primary" onclick="App.editIncident(${incident.id})" ${this.canDelete() ? '' : 'style="margin-left:auto;"'}>
+                    <i class="fas fa-edit"></i> Редактировать
+                </button>
+            ` : ''}
         `;
 
         this.showModal(`Инцидент: ${incident.number}`, content, footer);

@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS object_types (
     description TEXT,
     icon VARCHAR(100),
     color VARCHAR(20),
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS object_kinds (
     name VARCHAR(100) NOT NULL,
     object_type_id INTEGER REFERENCES object_types(id) ON DELETE CASCADE,
     description TEXT,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -97,6 +99,7 @@ CREATE TABLE IF NOT EXISTS object_status (
     color VARCHAR(20),
     description TEXT,
     sort_order INTEGER DEFAULT 0,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -115,6 +118,7 @@ CREATE TABLE IF NOT EXISTS owners (
     contact_phone VARCHAR(50),
     contact_email VARCHAR(255),
     notes TEXT,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -128,20 +132,48 @@ CREATE TABLE IF NOT EXISTS contracts (
     id SERIAL PRIMARY KEY,
     number VARCHAR(100) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
+    -- Арендатор
     owner_id INTEGER REFERENCES owners(id) ON DELETE RESTRICT,
+    -- Арендодатель
+    landlord_id INTEGER REFERENCES owners(id) ON DELETE RESTRICT,
     start_date DATE,
     end_date DATE,
     status VARCHAR(50) DEFAULT 'active',
     amount DECIMAL(15,2),
     notes TEXT,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX idx_contracts_owner ON contracts(owner_id);
+CREATE INDEX idx_contracts_landlord ON contracts(landlord_id);
 CREATE INDEX idx_contracts_number ON contracts(number);
 
 COMMENT ON TABLE contracts IS 'Контракты на обслуживание';
+
+-- 1.9 Системные настройки
+CREATE TABLE IF NOT EXISTS app_settings (
+    code VARCHAR(100) PRIMARY KEY,
+    value TEXT,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+COMMENT ON TABLE app_settings IS 'Системные настройки приложения (key/value)';
+
+-- 1.10 Персональные настройки пользователей
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code VARCHAR(100) NOT NULL,
+    value TEXT,
+    updated_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (user_id, code)
+);
+
+CREATE INDEX idx_user_settings_user ON user_settings(user_id);
+CREATE INDEX idx_user_settings_code ON user_settings(code);
+
+COMMENT ON TABLE user_settings IS 'Персональные настройки пользователя (key/value)';
 
 -- 1.8 Стили отображения (удалено, используем object_types + object_status)
 
@@ -187,6 +219,7 @@ CREATE TABLE IF NOT EXISTS channel_directions (
     geom_msk86 GEOMETRY(LINESTRING, 200004),
     owner_id INTEGER REFERENCES owners(id) ON DELETE RESTRICT,
     type_id INTEGER REFERENCES object_types(id) ON DELETE RESTRICT,
+    status_id INTEGER REFERENCES object_status(id) ON DELETE RESTRICT,
     start_well_id INTEGER NOT NULL REFERENCES wells(id) ON DELETE RESTRICT,
     end_well_id INTEGER NOT NULL REFERENCES wells(id) ON DELETE RESTRICT,
     length_m DECIMAL(10,2),

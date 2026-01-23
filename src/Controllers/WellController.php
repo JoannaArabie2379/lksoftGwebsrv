@@ -38,6 +38,7 @@ class WellController extends BaseController
                        ST_X(w.geom_msk86) as x_msk86, ST_Y(w.geom_msk86) as y_msk86,
                        w.owner_id, w.type_id, w.kind_id, w.status_id,
                        w.depth, w.material, w.installation_date, w.notes,
+                       (SELECT COUNT(*) FROM object_photos op WHERE op.object_table = 'wells' AND op.object_id = w.id) as photo_count,
                        o.name as owner_name, o.short_name as owner_short,
                        ot.name as type_name, ot.icon as type_icon, ot.color as type_color,
                        ok.name as kind_name,
@@ -91,8 +92,8 @@ class WellController extends BaseController
                        w.owner_id, w.type_id, w.kind_id, w.status_id,
                        o.name as owner_name,
                        ot.name as type_name, ot.color as type_color,
-                       ok.name as kind_name,
-                       os.name as status_name, os.color as status_color
+                       ok.code as kind_code, ok.name as kind_name,
+                       os.code as status_code, os.name as status_name, os.color as status_color
                 FROM wells w
                 LEFT JOIN owners o ON w.owner_id = o.id
                 LEFT JOIN object_types ot ON w.type_id = ot.id
@@ -285,6 +286,31 @@ class WellController extends BaseController
     }
 
     /**
+     * GET /api/wells/exists?number=...&exclude_id=...
+     * Проверка уникальности номера колодца (для UI)
+     */
+    public function existsNumber(): void
+    {
+        $number = trim((string) $this->request->query('number', ''));
+        $excludeId = (int) $this->request->query('exclude_id', 0);
+
+        if ($number === '') {
+            Response::success(['exists' => false]);
+        }
+
+        $sql = "SELECT id FROM wells WHERE number = :number";
+        $params = ['number' => $number];
+        if ($excludeId > 0) {
+            $sql .= " AND id <> :exclude_id";
+            $params['exclude_id'] = $excludeId;
+        }
+        $sql .= " LIMIT 1";
+
+        $row = $this->db->fetch($sql, $params);
+        Response::success(['exists' => (bool) $row]);
+    }
+
+    /**
      * PUT /api/wells/{id}
      * Обновление колодца
      */
@@ -309,6 +335,26 @@ class WellController extends BaseController
 
         try {
             $this->db->beginTransaction();
+
+            // Номер колодца: ККС-<код собственника>-<суффикс>
+            $ownerIdOld = (int) ($oldWell['owner_id'] ?? 0);
+            $ownerIdNew = array_key_exists('owner_id', $data) ? (int) $data['owner_id'] : $ownerIdOld;
+            $numberIncoming = array_key_exists('number', $data) ? trim((string) $data['number']) : null;
+            $numberBase = ($numberIncoming !== null && $numberIncoming !== '') ? $numberIncoming : (string) ($oldWell['number'] ?? '');
+            $suffix = '';
+            if (preg_match('/^ККС-[^-]+-(.+)$/u', $numberBase, $m)) {
+                $suffix = trim((string) ($m[1] ?? ''));
+            } else {
+                $suffix = trim($numberBase);
+            }
+
+            if (($ownerIdNew > 0 && $ownerIdNew !== $ownerIdOld) || $numberIncoming !== null) {
+                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => $ownerIdNew]);
+                $ownerCode = $owner['code'] ?? null;
+                if ($ownerCode) {
+                    $data['number'] = "ККС-{$ownerCode}-{$suffix}";
+                }
+            }
 
             // Обновляем координаты если переданы
             $longitude = $this->request->input('longitude');
@@ -341,6 +387,21 @@ class WellController extends BaseController
             // Обновляем остальные поля
             if (!empty($data)) {
                 $this->db->update('wells', $data, 'id = :id', ['id' => $wellId]);
+            }
+
+            // Если изменён номер колодца — обновляем номера направлений, где он участвует
+            $newNumber = $data['number'] ?? ($oldWell['number'] ?? null);
+            if ($newNumber !== null && (string) $newNumber !== (string) ($oldWell['number'] ?? '')) {
+                $this->db->query(
+                    "UPDATE channel_directions cd
+                     SET number = CONCAT(sw.number, '-', ew.number),
+                         updated_by = :uid
+                     FROM wells sw, wells ew
+                     WHERE cd.start_well_id = sw.id
+                       AND cd.end_well_id = ew.id
+                       AND (cd.start_well_id = :wid OR cd.end_well_id = :wid)",
+                    ['uid' => $user['id'], 'wid' => $wellId]
+                );
             }
 
             $this->db->commit();
@@ -412,13 +473,16 @@ class WellController extends BaseController
     public function export(): void
     {
         $filters = $this->buildFilters([
-            'owner_id' => 'owner_id',
-            'type_id' => 'type_id',
-            'status_id' => 'status_id',
+            'owner_id' => 'w.owner_id',
+            'type_id' => 'w.type_id',
+            'kind_id' => 'w.kind_id',
+            'status_id' => 'w.status_id',
+            '_search' => ['w.number', 'w.notes'],
         ]);
 
         $where = $filters['where'];
         $params = $filters['params'];
+        $delimiter = $this->normalizeCsvDelimiter($this->request->query('delimiter'), ';');
 
         $sql = "SELECT w.number, 
                        ST_X(w.geom_wgs84) as longitude, ST_Y(w.geom_wgs84) as latitude,
@@ -450,14 +514,272 @@ class WellController extends BaseController
         // Заголовки
         fputcsv($output, ['Номер', 'Долгота', 'Широта', 'X (МСК86)', 'Y (МСК86)', 
                          'Собственник', 'Вид', 'Тип', 'Состояние', 'Глубина', 'Материал', 
-                         'Дата установки', 'Примечания'], ';');
+                         'Дата установки', 'Примечания'], $delimiter);
         
         // Данные
         foreach ($data as $row) {
-            fputcsv($output, array_values($row), ';');
+            fputcsv($output, array_values($row), $delimiter);
         }
         
         fclose($output);
         exit;
+    }
+
+    /**
+     * POST /api/wells/import-text/preview
+     * Предпросмотр импорта колодцев из многострочного текста
+     */
+    public function importTextPreview(): void
+    {
+        $this->checkWriteAccess();
+
+        $text = (string) $this->request->input('text', '');
+        $delimiterRaw = (string) $this->request->input('delimiter', ';');
+        $delimiter = $this->normalizeCsvDelimiter($delimiterRaw, ';');
+
+        $lines = preg_split("/\r\n|\n|\r/", $text);
+        $lines = array_values(array_filter(array_map('trim', $lines), fn($l) => $l !== ''));
+
+        $previewRows = [];
+        $maxCols = 0;
+        foreach (array_slice($lines, 0, 20) as $line) {
+            $row = str_getcsv($line, $delimiter);
+            $row = array_map(fn($v) => trim((string) $v), $row ?: []);
+            $maxCols = max($maxCols, count($row));
+            $previewRows[] = $row;
+        }
+
+        Response::success([
+            'total_lines' => count($lines),
+            'max_columns' => $maxCols,
+            'preview' => $previewRows,
+            'fields' => [
+                'number',
+                'longitude',
+                'latitude',
+            ],
+        ]);
+    }
+
+    /**
+     * POST /api/wells/import-text
+     * Импорт колодцев из многострочного текста с сопоставлением колонок
+     */
+    public function importText(): void
+    {
+        $this->checkWriteAccess();
+
+        $text = (string) $this->request->input('text', '');
+        $delimiterRaw = (string) $this->request->input('delimiter', ';');
+        $delimiter = $this->normalizeCsvDelimiter($delimiterRaw, ';');
+        $mapping = $this->request->input('mapping', []);
+        // По ТЗ: только WGS84
+        $coordinateSystem = 'wgs84';
+
+        if (!is_array($mapping)) {
+            Response::error('Некорректное сопоставление колонок', 422);
+        }
+
+        // Значения по умолчанию (выбираются пользователем в шапке)
+        $defaultOwnerId = (int) $this->request->input('default_owner_id', 0);
+        $defaultKindId = (int) $this->request->input('default_kind_id', 0);
+        $defaultStatusId = (int) $this->request->input('default_status_id', 0);
+        if ($defaultOwnerId <= 0 || $defaultKindId <= 0 || $defaultStatusId <= 0) {
+            Response::error('Необходимо выбрать собственника, тип и состояние', 422);
+        }
+
+        // Разрешённые поля сопоставления колонок
+        $allowedMapFields = ['number', 'longitude', 'latitude'];
+        foreach ($mapping as $k => $v) {
+            if ($v === null || $v === '' || $v === 'ignore') continue;
+            if (!in_array($v, $allowedMapFields, true)) {
+                Response::error('Недопустимое поле сопоставления: ' . (string) $v, 422);
+            }
+        }
+
+        // type_id для колодцев определяем по системному коду object_types.code='well'
+        $wellTypeRow = $this->db->fetch("SELECT id FROM object_types WHERE code = 'well' LIMIT 1");
+        $wellTypeId = (int) ($wellTypeRow['id'] ?? 0);
+        if ($wellTypeId <= 0) {
+            Response::error('Не удалось определить вид объекта "well" (object_types)', 500);
+        }
+
+        // Код собственника нужен для формирования номера
+        $ownerRow = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => $defaultOwnerId]);
+        $ownerCode = trim((string) ($ownerRow['code'] ?? ''));
+        if ($ownerCode === '') {
+            Response::error('Не удалось определить код собственника', 422);
+        }
+        $numberPrefix = "ККС-{$ownerCode}-";
+
+        $lines = preg_split("/\r\n|\n|\r/", $text);
+        $lines = array_values(array_filter(array_map('trim', $lines), fn($l) => $l !== ''));
+
+        if (count($lines) === 0) {
+            Response::error('Пустой текст для импорта', 422);
+        }
+
+        $user = Auth::user();
+
+        // Кэши справочников (поиск id по коду/имени)
+        $ownersByKey = [];
+        $typesByKey = [];
+        $kindsByKey = [];
+        $statusByKey = [];
+
+        $resolve = function (string $field, string $value) use (&$ownersByKey, &$typesByKey, &$kindsByKey, &$statusByKey) {
+            $v = trim($value);
+            if ($v === '') return null;
+            if (is_numeric($v)) return (int) $v;
+
+            $key = function_exists('mb_strtolower') ? mb_strtolower($v) : strtolower($v);
+            $cache = null;
+            $table = null;
+            $sql = null;
+
+            if ($field === 'owner_id') {
+                $cache = &$ownersByKey;
+                $table = 'owners';
+                $sql = "SELECT id FROM owners WHERE LOWER(code) = :k OR LOWER(name) = :k OR LOWER(COALESCE(short_name, '')) = :k LIMIT 1";
+            } elseif ($field === 'type_id') {
+                $cache = &$typesByKey;
+                $table = 'object_types';
+                $sql = "SELECT id FROM object_types WHERE LOWER(code) = :k OR LOWER(name) = :k LIMIT 1";
+            } elseif ($field === 'kind_id') {
+                $cache = &$kindsByKey;
+                $table = 'object_kinds';
+                $sql = "SELECT id FROM object_kinds WHERE LOWER(code) = :k OR LOWER(name) = :k LIMIT 1";
+            } elseif ($field === 'status_id') {
+                $cache = &$statusByKey;
+                $table = 'object_status';
+                $sql = "SELECT id FROM object_status WHERE LOWER(code) = :k OR LOWER(name) = :k LIMIT 1";
+            } else {
+                return $v;
+            }
+
+            if (isset($cache[$key])) return $cache[$key];
+
+            $db = $this->db;
+            $row = $db->fetch($sql, ['k' => $key]);
+            $cache[$key] = $row ? (int) $row['id'] : null;
+            return $cache[$key];
+        };
+
+        $created = [];
+        $errors = [];
+        $imported = 0;
+
+        try {
+            $this->db->beginTransaction();
+
+            foreach ($lines as $idx => $line) {
+                $lineNo = $idx + 1;
+                try {
+                    $cols = str_getcsv($line, $delimiter);
+                    $cols = array_map(fn($v) => trim((string) $v), $cols ?: []);
+
+                    $data = [];
+                    foreach ($mapping as $colIndex => $fieldName) {
+                        if ($fieldName === null || $fieldName === '' || $fieldName === 'ignore') continue;
+                        $i = (int) $colIndex;
+                        $val = $cols[$i] ?? '';
+                        $val = is_string($val) ? trim($val) : $val;
+                        $data[$fieldName] = ($val === '' ? null : $val);
+                    }
+
+                    // Номер колодца: ККС-<код собственника>-<суффикс из колонки number>
+                    $suffix = trim((string) ($data['number'] ?? ''));
+                    if ($suffix === '') {
+                        throw new \RuntimeException('Не указан суффикс номера (колонка "Номер")');
+                    }
+                    $number = str_starts_with($suffix, $numberPrefix) ? $suffix : ($numberPrefix . $suffix);
+                    $len = function_exists('mb_strlen') ? mb_strlen($number) : strlen($number);
+                    if ($len > 50) {
+                        throw new \RuntimeException('Номер слишком длинный (max 50)');
+                    }
+
+                    // Справочники (type_id фиксированный для колодцев)
+                    $data['type_id'] = $wellTypeId;
+
+                    // owner/kind/status только из шапки
+                    $data['owner_id'] = $defaultOwnerId;
+                    $data['kind_id'] = $defaultKindId;
+                    $data['status_id'] = $defaultStatusId;
+
+                    // Координаты
+                    $lon = $data['longitude'] ?? null;
+                    $lat = $data['latitude'] ?? null;
+                    if ($lon === null || $lat === null || !is_numeric($lon) || !is_numeric($lat)) {
+                        throw new \RuntimeException('Не указаны корректные координаты Долгота/Широта (WGS84)');
+                    }
+
+                    // Опциональные поля
+                    $optional = [
+                        'depth' => 'numeric',
+                        'material' => 'string',
+                        'installation_date' => 'date',
+                        'notes' => 'string',
+                    ];
+                    foreach ($optional as $field => $kind) {
+                        if (!array_key_exists($field, $data)) continue;
+                        if ($data[$field] === null) continue;
+                        if ($kind === 'numeric' && !is_numeric($data[$field])) {
+                            throw new \RuntimeException("Некорректное значение {$field}");
+                        }
+                        if ($kind === 'date') {
+                            $ts = strtotime((string) $data[$field]);
+                            if ($ts === false) {
+                                throw new \RuntimeException("Некорректная дата {$field}");
+                            }
+                            $data[$field] = date('Y-m-d', $ts);
+                        }
+                    }
+
+                    // created/updated
+                    $data['created_by'] = $user['id'];
+                    $data['updated_by'] = $user['id'];
+                    $data['number'] = $number;
+
+                    // Вставка
+                    $sql = "INSERT INTO wells (number, geom_wgs84, owner_id, type_id, kind_id, status_id, depth, material, installation_date, notes, created_by, updated_by)
+                            VALUES (:number, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
+                                    :owner_id, :type_id, :kind_id, :status_id, :depth, :material, :installation_date, :notes, :created_by, :updated_by)
+                            RETURNING id";
+                    $params = [
+                        'number' => $data['number'],
+                        'lon' => (float) $lon,
+                        'lat' => (float) $lat,
+                        'owner_id' => $data['owner_id'],
+                        'type_id' => $wellTypeId,
+                        'kind_id' => $data['kind_id'],
+                        'status_id' => $data['status_id'],
+                        'depth' => $data['depth'] ?? null,
+                        'material' => $data['material'] ?? null,
+                        'installation_date' => $data['installation_date'] ?? null,
+                        'notes' => $data['notes'] ?? null,
+                        'created_by' => $data['created_by'],
+                        'updated_by' => $data['updated_by'],
+                    ];
+
+                    $stmt = $this->db->query($sql, $params);
+                    $newId = (int) $stmt->fetchColumn();
+                    $imported++;
+                    $created[] = ['line' => $lineNo, 'id' => $newId, 'number' => $data['number']];
+                } catch (\Throwable $e) {
+                    $errors[] = ['line' => $lineNo, 'error' => $e->getMessage()];
+                }
+            }
+
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollback();
+            Response::error('Ошибка импорта: ' . $e->getMessage(), 500);
+        }
+
+        Response::success([
+            'imported' => $imported,
+            'created' => $created,
+            'errors' => $errors,
+        ], "Импортировано {$imported} записей");
     }
 }
