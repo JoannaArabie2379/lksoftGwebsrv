@@ -1241,6 +1241,13 @@ tr:hover {
         min-height: 0;
         overflow: auto; /* скролл списка карточек */
     }
+
+    /* Справочники: контент (таблица) должен скроллиться на мобильных */
+    #reference-content {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+    }
 }
 
 /* Переключатель темы карты (Leaflet control) */
