@@ -1177,12 +1177,20 @@ tr:hover {
         z-index: 2000;
         transition: left 0.3s;
         width: min(92vw, var(--sidebar-width));
+        overflow: hidden; /* скролл включаем только когда sidebar открыт */
     }
     
     .sidebar.open {
         left: 0;
         top: auto;
         height: calc(100vh - var(--topbar-height));
+        overflow-y: auto; /* скролл на всём sidebar (как требуется) */
+    }
+
+    /* Убираем внутренний скролл: теперь скроллится весь sidebar */
+    .sidebar-panel {
+        overflow: visible;
+        flex: 0 0 auto;
     }
     
     .modal-content {
