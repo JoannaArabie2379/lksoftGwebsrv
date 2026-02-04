@@ -507,6 +507,8 @@ CREATE TABLE IF NOT EXISTS object_groups (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     group_type VARCHAR(50),
+    tu_date DATE,
+    request_basis VARCHAR(100),
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()

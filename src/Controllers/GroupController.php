@@ -65,7 +65,7 @@ class GroupController extends BaseController
         
         $filters = $this->buildFilters([
             'group_type' => 'g.group_type',
-            '_search' => ['g.number', 'g.name', 'g.description'],
+            '_search' => ['g.number', 'g.name', 'g.description', 'g.request_basis'],
         ]);
 
         $where = $filters['where'];
@@ -73,7 +73,7 @@ class GroupController extends BaseController
 
         $total = $this->getTotal('object_groups', $where, $params, 'g');
 
-        $sql = "SELECT g.id, g.number, g.name, g.description, g.group_type,
+        $sql = "SELECT g.id, g.number, g.name, g.description, g.group_type, g.tu_date, g.request_basis,
                        g.created_at, g.updated_at,
                        u.login as created_by_login,
                        (SELECT COUNT(*) FROM group_wells WHERE group_id = g.id) +
@@ -106,14 +106,14 @@ class GroupController extends BaseController
     {
         $filters = $this->buildFilters([
             'group_type' => 'g.group_type',
-            '_search' => ['g.number', 'g.name', 'g.description'],
+            '_search' => ['g.number', 'g.name', 'g.description', 'g.request_basis'],
         ]);
 
         $where = $filters['where'];
         $params = $filters['params'];
         $delimiter = $this->normalizeCsvDelimiter($this->request->query('delimiter'), ';');
 
-        $sql = "SELECT g.number, g.name, g.description, g.group_type,
+        $sql = "SELECT g.number, g.name, g.tu_date, g.request_basis, g.description, g.group_type,
                        u.login as created_by_login,
                        g.created_at,
                        (SELECT COUNT(*) FROM group_wells WHERE group_id = g.id) +
@@ -138,7 +138,7 @@ class GroupController extends BaseController
         $output = fopen('php://output', 'w');
         fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
 
-        fputcsv($output, ['Номер', 'Название', 'Описание', 'Тип группы', 'Создал', 'Создано', 'Объектов'], $delimiter);
+        fputcsv($output, ['Номер', 'Название', 'Дата', 'Основание (Запрос)', 'Описание', 'Тип ТУ', 'Создал', 'Создано', 'Объектов'], $delimiter);
         foreach ($data as $row) {
             fputcsv($output, array_values($row), $delimiter);
         }
@@ -178,6 +178,7 @@ class GroupController extends BaseController
 
         $errors = $this->request->validate([
             'name' => 'required|string|max:100',
+            'request_basis' => 'string|max:100',
         ]);
 
         if (!empty($errors)) {
@@ -185,7 +186,7 @@ class GroupController extends BaseController
         }
 
         // number формируется автоматически (например, по ID)
-        $data = $this->request->only(['name', 'description', 'group_type']);
+        $data = $this->request->only(['name', 'description', 'group_type', 'tu_date', 'request_basis']);
         
         $user = Auth::user();
         $data['created_by'] = $user['id'];
@@ -230,7 +231,7 @@ class GroupController extends BaseController
         }
 
         // number не редактируется
-        $data = $this->request->only(['name', 'description', 'group_type']);
+        $data = $this->request->only(['name', 'description', 'group_type', 'tu_date', 'request_basis']);
         $data = array_filter($data, fn($v) => $v !== null);
 
         try {

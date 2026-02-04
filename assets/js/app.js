@@ -908,7 +908,7 @@ const App = {
                     break;
                 case 'groups':
                     response = await API.groups.list(params);
-                    columns = ['number', 'name', 'object_count', 'group_type'];
+                    columns = ['number', 'name', 'tu_date', 'request_basis', 'object_count', 'group_type'];
                     break;
             }
 
@@ -978,6 +978,8 @@ const App = {
             name: 'Название',
             object_count: 'Объектов',
             group_type: 'Тип',
+            tu_date: 'Дата',
+            request_basis: 'Основание (Запрос)',
             cable_type_name: 'Тип кабеля',
             object_type_name: 'Вид объекта',
             cable_marking: 'Маркировка',
@@ -1595,8 +1597,16 @@ const App = {
                             <input type="text" name="number" value="${obj.number || obj.id || ''}" disabled style="background: var(--bg-tertiary);">
                         </div>
                         <div class="form-group">
+                            <label>Дата</label>
+                            <input type="date" name="tu_date" value="${obj.tu_date || ''}">
+                        </div>
+                        <div class="form-group">
                             <label>Название *</label>
                             <input type="text" name="name" value="${obj.name || ''}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Основание (Запрос)</label>
+                            <input type="text" name="request_basis" maxlength="100" value="${obj.request_basis || ''}">
                         </div>
                         <div class="form-group">
                             <label>Тип ТУ</label>
@@ -3556,8 +3566,16 @@ const App = {
                         <input type="text" name="number" value="(авто)" disabled style="background: var(--bg-tertiary);">
                     </div>
                     <div class="form-group">
+                        <label>Дата</label>
+                        <input type="date" name="tu_date">
+                    </div>
+                    <div class="form-group">
                         <label>Название *</label>
                         <input type="text" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Основание (Запрос)</label>
+                        <input type="text" name="request_basis" maxlength="100" placeholder="(необязательно)">
                     </div>
                     <div class="form-group">
                         <label>Тип ТУ</label>
