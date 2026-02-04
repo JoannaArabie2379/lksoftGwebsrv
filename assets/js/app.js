@@ -16,6 +16,14 @@ const App = {
     selectedObjectIds: new Set(),
     _contractsPanelLoaded: false,
 
+    // ТУ режим (на карте): создаваемые объекты -> planned + автопривязка к выбранному ТУ
+    tuModeEnabled: false,
+    tuModeGroupId: null,
+    _tuListCache: null,
+    _tuListSelectedId: null,
+    _tuListSearch: '',
+    _returnToTuListAfterCreate: false,
+
     /**
      * Инициализация приложения
      */
@@ -392,6 +400,9 @@ const App = {
         document.getElementById('btn-toggle-owner-legend')?.addEventListener('click', (e) => {
             MapManager.toggleOwnersLegend();
             e.currentTarget.classList.toggle('active', MapManager.ownersLegendEnabled);
+        });
+        document.getElementById('btn-tu-mode')?.addEventListener('click', () => {
+            this.openTuModeModal().catch(() => {});
         });
         document.getElementById('btn-cancel-add-mode')?.addEventListener('click', () => {
             MapManager.cancelAddDirectionMode();
@@ -1909,6 +1920,130 @@ const App = {
         } catch (e) {
             this.notify(e?.message || 'Ошибка удаления файла', 'error');
         }
+    },
+
+    // ========================
+    // Карта: режим ТУ
+    // ========================
+
+    async openTuModeModal(preselectId = null) {
+        try {
+            const resp = await API.groups.list({ limit: 1000, page: 1 });
+            if (!resp || resp.success === false) {
+                this.notify(resp?.message || 'Не удалось загрузить список ТУ', 'error');
+                return;
+            }
+            const list = resp.data || resp || [];
+            // Z-A
+            list.sort((a, b) => {
+                const aa = String(a?.name || a?.number || '').toLowerCase();
+                const bb = String(b?.name || b?.number || '').toLowerCase();
+                return bb.localeCompare(aa);
+            });
+            this._tuListCache = list;
+            this._tuListSearch = '';
+            this._tuListSelectedId = preselectId ? String(preselectId) : (this.tuModeGroupId ? String(this.tuModeGroupId) : null);
+            this.renderTuModeModal();
+        } catch (e) {
+            this.notify('Не удалось загрузить список ТУ', 'error');
+        }
+    },
+
+    renderTuModeModal() {
+        const list = Array.isArray(this._tuListCache) ? this._tuListCache : [];
+        const search = String(this._tuListSearch || '').trim().toLowerCase();
+
+        const filtered = !search ? list : list.filter((g) => {
+            const hay = [
+                g?.number, g?.name, g?.tu_date, g?.request_basis, g?.description, g?.group_type
+            ].filter(Boolean).join(' ').toLowerCase();
+            return hay.includes(search);
+        });
+
+        const current = this.tuModeGroupId ? list.find(x => String(x.id) === String(this.tuModeGroupId)) : null;
+        const currentLabel = current ? `${current.number || current.id} — ${current.name || ''}` : 'не выбран';
+
+        const content = `
+            <div class="form-group" style="margin-bottom: 10px;">
+                <div class="text-muted">Текущий ТУ: <strong>${this.escapeHtml(currentLabel)}</strong></div>
+            </div>
+            <div class="form-group">
+                <label>Поиск</label>
+                <input type="text" id="tu-list-search" placeholder="Поиск по всем полям..." value="${this.escapeHtml(this._tuListSearch || '')}">
+            </div>
+            <div style="border:1px solid var(--border-color); border-radius:10px; overflow:hidden;">
+                <div style="max-height: 45vh; overflow:auto; background: rgba(0,0,0,0.08);">
+                    ${filtered.length ? filtered.map(g => {
+                        const id = String(g.id);
+                        const checked = this._tuListSelectedId && String(this._tuListSelectedId) === id ? 'checked' : '';
+                        const title = `${g.number || g.id} — ${g.name || ''}`;
+                        const sub = [
+                            g.tu_date ? `Дата: ${g.tu_date}` : '',
+                            g.request_basis ? `Основание: ${g.request_basis}` : '',
+                        ].filter(Boolean).join(' • ');
+                        return `
+                            <label style="display:flex; gap:10px; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,0.08); cursor:pointer;">
+                                <input type="radio" name="tu-select" value="${id}" ${checked} style="margin-top: 2px;">
+                                <div style="min-width:0;">
+                                    <div style="font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this.escapeHtml(title)}</div>
+                                    <div class="text-muted" style="font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this.escapeHtml(sub)}</div>
+                                </div>
+                            </label>
+                        `;
+                    }).join('') : `<div class="text-muted" style="padding:12px;">Нет ТУ</div>`}
+                </div>
+            </div>
+        `;
+
+        const footer = `
+            <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+            ${this.canWrite() ? `<button class="btn btn-secondary" onclick="App.createTuFromTuList()"><i class="fas fa-plus"></i> Создать ТУ</button>` : ''}
+            ${this.tuModeEnabled ? `<button class="btn btn-danger" onclick="App.disableTuMode()" style="margin-right:auto;"><i class="fas fa-times"></i> Выключить режим</button>` : `<span style="margin-right:auto;"></span>`}
+            <button class="btn btn-primary" onclick="App.selectTuFromTuList()"><i class="fas fa-check"></i> Выбрать ТУ</button>
+        `;
+
+        this.showModal('Список карточек ТУ', content, footer);
+
+        const input = document.getElementById('tu-list-search');
+        if (input) {
+            input.addEventListener('input', (e) => {
+                this._tuListSearch = e.target.value || '';
+                this.renderTuModeModal();
+            });
+        }
+        document.querySelectorAll('input[name="tu-select"]').forEach((el) => {
+            el.addEventListener('change', () => {
+                this._tuListSelectedId = el.value;
+            });
+        });
+    },
+
+    createTuFromTuList() {
+        this._returnToTuListAfterCreate = true;
+        this.showAddObjectModal('groups');
+    },
+
+    selectTuFromTuList() {
+        const selected = document.querySelector('input[name="tu-select"]:checked');
+        const id = selected?.value || this._tuListSelectedId;
+        if (!id) {
+            this.notify('Выберите ТУ из списка', 'warning');
+            return;
+        }
+        this.tuModeEnabled = true;
+        this.tuModeGroupId = parseInt(id, 10);
+        document.getElementById('btn-tu-mode')?.classList.toggle('active', true);
+        this.notify('Режим ТУ включён', 'success');
+        this.hideModal();
+    },
+
+    disableTuMode() {
+        this.tuModeEnabled = false;
+        this.tuModeGroupId = null;
+        document.getElementById('btn-tu-mode')?.classList.toggle('active', false);
+        this.notify('Режим ТУ выключен', 'info');
+        // оставляем модалку открытой
+        this.renderTuModeModal();
     },
 
     /**
@@ -4150,9 +4285,11 @@ const App = {
             }
 
             if (response && response.success) {
+                let createdGroupId = null;
                 // ТУ: загружаем выбранные вложения сразу после создания
                 if (type === 'groups') {
                     const groupId = response?.data?.id || response?.data?.group_id || response?.id;
+                    createdGroupId = groupId ? parseInt(groupId, 10) : null;
                     const files = Array.isArray(this._pendingGroupAttachments) ? this._pendingGroupAttachments : [];
                     if (groupId && files.length) {
                         let ok = 0;
@@ -4178,6 +4315,16 @@ const App = {
                 this.notify('Объект создан', 'success');
                 this.loadObjects();
                 MapManager.loadAllLayers();
+
+                // Возврат в "Список карточек ТУ" после создания ТУ
+                if (type === 'groups' && this._returnToTuListAfterCreate && createdGroupId) {
+                    this._returnToTuListAfterCreate = false;
+                    setTimeout(() => {
+                        this.openTuModeModal(createdGroupId).catch(() => {});
+                    }, 50);
+                } else if (type === 'groups') {
+                    this._returnToTuListAfterCreate = false;
+                }
             } else {
                 this.notify(response?.message || 'Ошибка создания', 'error');
             }
