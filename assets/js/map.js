@@ -43,10 +43,10 @@ const MapManager = {
     ownersLegendEl: null,
     _ownersLegendCache: null,
     _lastGroupFilters: null,
-    // Базовые слои Yandex (схема/спутник)
-    yandexBaseLayer: null,
-    yandexSatLayer: null,
-    yandexSatelliteEnabled: false,
+    // Базовые слои карты: OSM (по умолчанию) + Спутник (WMTS ЯНАО)
+    osmBaseLayer: null,
+    wmtsSatelliteLayer: null,
+    wmtsSatelliteEnabled: false,
     initialViewLocked: true,
 
     // Режим группы (показываем только объекты группы)
@@ -167,27 +167,27 @@ const MapManager = {
         });
     },
 
-    setYandexSatelliteEnabled(enabled) {
-        this.yandexSatelliteEnabled = !!enabled;
+    setWmtsSatelliteEnabled(enabled) {
+        this.wmtsSatelliteEnabled = !!enabled;
         if (!this.map) return;
-        if (!this.yandexBaseLayer || !this.yandexSatLayer) return;
+        if (!this.osmBaseLayer || !this.wmtsSatelliteLayer) return;
 
         try {
-            if (this.yandexSatelliteEnabled) {
-                if (this.map.hasLayer(this.yandexBaseLayer)) this.map.removeLayer(this.yandexBaseLayer);
-                if (!this.map.hasLayer(this.yandexSatLayer)) this.map.addLayer(this.yandexSatLayer);
+            if (this.wmtsSatelliteEnabled) {
+                if (this.map.hasLayer(this.osmBaseLayer)) this.map.removeLayer(this.osmBaseLayer);
+                if (!this.map.hasLayer(this.wmtsSatelliteLayer)) this.map.addLayer(this.wmtsSatelliteLayer);
             } else {
-                if (this.map.hasLayer(this.yandexSatLayer)) this.map.removeLayer(this.yandexSatLayer);
-                if (!this.map.hasLayer(this.yandexBaseLayer)) this.map.addLayer(this.yandexBaseLayer);
+                if (this.map.hasLayer(this.wmtsSatelliteLayer)) this.map.removeLayer(this.wmtsSatelliteLayer);
+                if (!this.map.hasLayer(this.osmBaseLayer)) this.map.addLayer(this.osmBaseLayer);
             }
         } catch (_) {}
     },
 
     toggleExternalWmtsLayer() {
-        // историческое имя метода — используем как тумблер "Схема/Спутник"
-        this.setYandexSatelliteEnabled(!this.yandexSatelliteEnabled);
+        // тумблер "OSM <-> Спутник (WMTS)"
+        this.setWmtsSatelliteEnabled(!this.wmtsSatelliteEnabled);
         if (typeof App !== 'undefined') {
-            App.notify(this.yandexSatelliteEnabled ? 'Спутник включён' : 'Схема включена', 'info');
+            App.notify(this.wmtsSatelliteEnabled ? 'Спутник включён' : 'OSM включён', 'info');
         }
     },
 
@@ -265,19 +265,25 @@ const MapManager = {
             zoomControl: true,
         });
 
-        // Базовые слои: Yandex схема (по умолчанию) и Yandex спутник
-        // Оба работают в WebMercator и должны совпадать с геометрией (WGS84 -> EPSG:3857 в Leaflet)
-        this.yandexBaseLayer = L.tileLayer('https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}', {
-            maxZoom: 22,
-            attribution: '&copy; Yandex',
+        // Базовый слой: OSM (по умолчанию)
+        this.osmBaseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            maxZoom: 19,
         }).addTo(this.map);
 
-        this.yandexSatLayer = L.tileLayer('https://core-sat.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}', {
+        // Спутник: WMTS ЯНАО (GoogleMapsCompatible)
+        // Capabilities:
+        // - Style: default
+        // - TileMatrixSet: GoogleMapsCompatible
+        // - TileMatrix/Row/Col подставляются автоматически по z/y/x
+        const wmtsTemplate =
+            'https://karta.yanao.ru/ags1/rest/services/basemap/ags1_Imagery_bpla/MapServer/WMTS/tile/1.0.0/' +
+            'basemap_ags1_Imagery_bpla/default/GoogleMapsCompatible/{z}/{y}/{x}';
+        this.wmtsSatelliteLayer = L.tileLayer(wmtsTemplate, {
             maxZoom: 22,
-            attribution: '&copy; Yandex',
+            attribution: '&copy; ЯНАО',
         });
-
-        this.yandexSatelliteEnabled = false;
+        this.wmtsSatelliteEnabled = false;
 
         // Инициализируем пустые слои
         this.layers = {
