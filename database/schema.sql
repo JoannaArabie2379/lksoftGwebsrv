@@ -128,6 +128,18 @@ CREATE INDEX idx_owners_name ON owners(name);
 
 COMMENT ON TABLE owners IS 'Собственники объектов';
 
+-- Персональные цвета собственников (для легенды по собственникам)
+CREATE TABLE IF NOT EXISTS user_owner_colors (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    color VARCHAR(20) NOT NULL,
+    updated_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (user_id, owner_id)
+);
+
+CREATE INDEX idx_user_owner_colors_user ON user_owner_colors(user_id);
+CREATE INDEX idx_user_owner_colors_owner ON user_owner_colors(owner_id);
+
 -- 1.7 Контракты
 CREATE TABLE IF NOT EXISTS contracts (
     id SERIAL PRIMARY KEY,

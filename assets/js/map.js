@@ -43,6 +43,8 @@ const MapManager = {
     ownersLegendEl: null,
     _ownersLegendCache: null,
     _lastGroupFilters: null,
+    // Множественный выбор объектов на карте
+    multiSelected: new Map(), // key => { objectType, properties }
     // Базовые слои карты: OSM (по умолчанию) + Спутник (WMTS ЯНАО)
     osmBaseLayer: null,
     wmtsSatelliteLayer: null,
@@ -465,7 +467,7 @@ const MapManager = {
                                 return;
                             }
                             L.DomEvent.stopPropagation(e);
-                            this.handleObjectsClick(e.latlng || layer.getLatLng());
+                            this.handleObjectsClick(e);
                         });
 
                         // Popup при наведении
@@ -595,7 +597,7 @@ const MapManager = {
         try {
             if (this._ownersLegendCache && Array.isArray(this._ownersLegendCache)) return this._ownersLegendCache;
             if (typeof API === 'undefined') return [];
-            const resp = await API.references.all('owners');
+            const resp = await (API.owners?.colors ? API.owners.colors() : API.references.all('owners'));
             const rows = resp?.data || resp || [];
             const out = (rows || []).map(o => ({
                 id: o.id,
@@ -626,13 +628,52 @@ const MapManager = {
             <div class="owners-legend-list">
                 ${(owners || []).map(o => `
                     <div class="owners-legend-item" title="${String(o.name || o.short_name || '').replace(/"/g, '&quot;')}">
-                        <span class="owners-legend-swatch" style="background:${o.color};"></span>
+                        <button type="button" class="owners-legend-swatch" data-owner-id="${o.id}" data-color="${o.color}" style="background:${o.color};" title="Изменить цвет"></button>
                         <span class="owners-legend-text">${String(o.short_name || o.code || '')}</span>
                     </div>
                 `).join('')}
             </div>
         `;
         el.classList.remove('hidden');
+
+        // Персональная смена цвета по клику на маркер
+        try {
+            el.querySelectorAll('.owners-legend-swatch[data-owner-id]').forEach((btn) => {
+                btn.addEventListener('click', async () => {
+                    const ownerId = parseInt(btn.dataset.ownerId, 10);
+                    if (!ownerId) return;
+                    const current = (btn.dataset.color || '#3b82f6').toString();
+
+                    const input = document.createElement('input');
+                    input.type = 'color';
+                    input.value = current;
+                    input.style.position = 'absolute';
+                    input.style.left = '-9999px';
+                    document.body.appendChild(input);
+
+                    const cleanup = () => { try { document.body.removeChild(input); } catch (_) {} };
+
+                    input.addEventListener('change', async () => {
+                        const color = (input.value || '').toString();
+                        cleanup();
+                        try {
+                            const resp = await API.owners.setColor(ownerId, color);
+                            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+
+                            // Сбрасываем кеш и перерисовываем
+                            this._ownersLegendCache = null;
+                            await this.renderOwnersLegend();
+                            await this.reloadForLegend();
+                        } catch (e) {
+                            App?.notify?.(e?.message || 'Не удалось сохранить цвет', 'error');
+                        }
+                    }, { once: true });
+
+                    input.addEventListener('blur', cleanup, { once: true });
+                    input.click();
+                });
+            });
+        } catch (_) {}
     },
 
     async reloadForLegend() {
@@ -695,7 +736,7 @@ const MapManager = {
                                 return;
                             }
                             L.DomEvent.stopPropagation(e);
-                            this.handleObjectsClick(e.latlng);
+                            this.handleObjectsClick(e);
                         });
                         
                         layer.bindTooltip(`
@@ -745,7 +786,7 @@ const MapManager = {
                         layer._igsMeta = { objectType: 'marker_post', properties: feature.properties };
                         layer.on('click', (e) => {
                             L.DomEvent.stopPropagation(e);
-                            this.handleObjectsClick(e.latlng || layer.getLatLng());
+                            this.handleObjectsClick(e);
                         });
                         
                         layer.bindTooltip(`
@@ -806,7 +847,7 @@ const MapManager = {
                         layer._igsMeta = { objectType: 'unified_cable', properties: feature.properties };
                         layer.on('click', (e) => {
                             L.DomEvent.stopPropagation(e);
-                            this.handleObjectsClick(e.latlng);
+                            this.handleObjectsClick(e);
                         });
                         
                         const typeName = {
@@ -828,9 +869,35 @@ const MapManager = {
         }
     },
 
-    handleObjectsClick(latlng) {
+    // e: Leaflet MouseEvent
+    handleObjectsClick(e) {
+        const latlng = e?.latlng || e;
         const hits = this.getObjectsAtLatLng(latlng);
         this.lastClickHits = hits;
+
+        const isCtrl = !!(e?.originalEvent && (e.originalEvent.ctrlKey || e.originalEvent.metaKey));
+
+        // Множественный выбор (Ctrl+клик) — только в обычном режиме
+        if (isCtrl && !this.groupPickMode && !this.incidentSelectMode && !this.addDirectionMode && !this.addingObject && !this.addCableMode && !this.addDuctCableMode) {
+            if (hits.length <= 1) {
+                const h = hits[0];
+                if (h) this.toggleMultiSelection(h);
+                return;
+            }
+            const content = `
+                <div style="max-height: 60vh; overflow:auto;">
+                    ${(hits || []).map((h, idx) => `
+                        <button class="btn btn-secondary btn-block" style="margin-bottom:8px;" onclick="MapManager.selectObjectForMultiFromHits(${idx})">
+                            ${h.title}
+                        </button>
+                    `).join('')}
+                </div>
+                <p class="text-muted" style="margin-top:8px;">Выберите объект для добавления/исключения из выделения.</p>
+            `;
+            const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
+            App.showModal('Множественный выбор', content, footer);
+            return;
+        }
 
         // Выбор объекта для добавления в группу
         if (this.groupPickMode) {
@@ -905,6 +972,13 @@ const MapManager = {
         `;
         const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
         App.showModal('Выберите объект', content, footer);
+    },
+
+    selectObjectForMultiFromHits(idx) {
+        const h = (this.lastClickHits || [])[idx];
+        if (!h) return;
+        App.hideModal();
+        this.toggleMultiSelection(h);
     },
 
     selectObjectFromHits(idx) {
@@ -1060,6 +1134,10 @@ const MapManager = {
      * Показ информации об объекте
      */
     showObjectInfo(objectType, properties) {
+        // Если был включён множественный выбор — сбрасываем его при обычном выборе объекта
+        if (this.multiSelected && this.multiSelected.size) {
+            this.clearMultiSelection();
+        }
         // Подсветка выбранного объекта (тень)
         this.highlightSelectedObject(objectType, properties?.id);
         // Для кабеля дополнительно подсвечиваем линию, как в сценарии "кабели в направлении"
@@ -1217,6 +1295,110 @@ const MapManager = {
 
     clearSelectedObject() {
         this.setSelectedLayer(null);
+    },
+
+    multiSelectKey(h) {
+        return `${h?.objectType}:${h?.properties?.id}`;
+    },
+
+    clearMultiSelection() {
+        try {
+            for (const [k, v] of (this.multiSelected || new Map()).entries()) {
+                const layer = this.findLayerByMeta(v?.objectType, v?.properties?.id);
+                if (layer) this.applySelectedShadow(layer, false);
+            }
+        } catch (_) {}
+        this.multiSelected = new Map();
+        this.hideMultiSelectionInfo();
+    },
+
+    toggleMultiSelection(hit) {
+        if (!hit || !hit.objectType || !hit.properties?.id) return;
+        const key = this.multiSelectKey(hit);
+
+        // При первом Ctrl+клике — снимаем одиночное выделение
+        this.clearSelectedObject();
+
+        const exists = this.multiSelected?.has?.(key);
+        if (exists) {
+            this.multiSelected.delete(key);
+            const layer = this.findLayerByMeta(hit.objectType, hit.properties.id);
+            if (layer) this.applySelectedShadow(layer, false);
+        } else {
+            if (!(this.multiSelected instanceof Map)) this.multiSelected = new Map();
+            this.multiSelected.set(key, { objectType: hit.objectType, properties: hit.properties });
+            const layer = this.findLayerByMeta(hit.objectType, hit.properties.id);
+            if (layer) this.applySelectedShadow(layer, true);
+        }
+
+        // если ничего не осталось — закрываем панель
+        if ((this.multiSelected?.size || 0) === 0) {
+            this.hideMultiSelectionInfo();
+            return;
+        }
+        this.showMultiSelectionInfo();
+    },
+
+    getMultiSelectedList() {
+        try {
+            return Array.from((this.multiSelected || new Map()).values());
+        } catch (_) {
+            return [];
+        }
+    },
+
+    showMultiSelectionInfo() {
+        const infoPanel = document.getElementById('object-info-panel');
+        const infoTitle = document.getElementById('info-title');
+        const infoContent = document.getElementById('info-content');
+        if (!infoPanel || !infoTitle || !infoContent) return;
+
+        const list = this.getMultiSelectedList();
+        infoTitle.textContent = `Выбрано объектов: ${list.length}`;
+
+        const rows = list.slice(0, 50).map((x) => {
+            const ot = x.objectType;
+            const p = x.properties || {};
+            return `<div class="info-row">
+                <span class="info-label">${this.getTypeDisplayName(ot)}:</span>
+                <span class="info-value">${String(p.number || p.id || '').replace(/</g, '&lt;')}</span>
+            </div>`;
+        }).join('');
+
+        const canBulkEdit = (typeof App !== 'undefined' && typeof App.canWrite === 'function' && App.canWrite());
+        infoContent.innerHTML = `
+            <div class="text-muted" style="margin-bottom:8px;">Ctrl+клик — добавить/убрать объект из выделения.</div>
+            ${rows}
+            ${list.length > 50 ? `<div class="text-muted" style="margin-top:8px;">... и ещё ${list.length - 50}</div>` : ``}
+            <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+                ${canBulkEdit ? `
+                    <button type="button" class="btn btn-sm btn-primary" onclick="App.showMapBulkEditModal()">
+                        <i class="fas fa-pen"></i> Изменить выбранные
+                    </button>
+                ` : ``}
+                <button type="button" class="btn btn-sm btn-danger" onclick="MapManager.clearMultiSelection()">
+                    <i class="fas fa-times"></i> Снять выделение
+                </button>
+            </div>
+        `;
+
+        // прячем стандартные кнопки (редактировать/удалить) для мультивыбора
+        document.getElementById('btn-edit-object')?.classList.add('hidden');
+        document.getElementById('btn-delete-object')?.classList.add('hidden');
+        document.getElementById('btn-copy-coords')?.classList.add('hidden');
+        infoPanel.classList.remove('hidden');
+    },
+
+    hideMultiSelectionInfo() {
+        // возвращаем стандартные кнопки (в showObjectInfo они выставятся корректно)
+        document.getElementById('btn-edit-object')?.classList.remove('hidden');
+        document.getElementById('btn-delete-object')?.classList.remove('hidden');
+        // copy coords зависит от типа — пусть управляется showObjectInfo
+        try {
+            const panel = document.getElementById('object-info-panel');
+            const type = panel?.dataset?.objectType || '';
+            if (type !== 'well') document.getElementById('btn-copy-coords')?.classList.add('hidden');
+        } catch (_) {}
     },
 
     clearHighlight() {
@@ -1914,7 +2096,7 @@ const MapManager = {
                         layer._igsMeta = { objectType: 'well', properties: feature.properties };
                         layer.on('click', (e) => {
                             L.DomEvent.stopPropagation(e);
-                            this.handleObjectsClick(e.latlng || layer.getLatLng());
+                            this.handleObjectsClick(e);
                         });
                         return;
                     }
@@ -1923,7 +2105,7 @@ const MapManager = {
                         layer._igsMeta = { objectType: 'marker_post', properties: feature.properties };
                         layer.on('click', (e) => {
                             L.DomEvent.stopPropagation(e);
-                            this.handleObjectsClick(e.latlng || layer.getLatLng());
+                            this.handleObjectsClick(e);
                         });
                     }
                 };
@@ -1942,7 +2124,7 @@ const MapManager = {
                     layer._igsMeta = { objectType, properties: feature.properties };
                     layer.on('click', (e) => {
                         L.DomEvent.stopPropagation(e);
-                        this.handleObjectsClick(e.latlng);
+                        this.handleObjectsClick(e);
                     });
                 };
 

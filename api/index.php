@@ -112,6 +112,7 @@ use App\Controllers\IncidentController;
 use App\Controllers\IncidentDocumentController;
 use App\Controllers\GroupController;
 use App\Controllers\GroupAttachmentController;
+use App\Controllers\OwnerColorController;
 use App\Controllers\ImportController;
 use App\Controllers\PhotoController;
 use App\Controllers\ReportController;
@@ -171,6 +172,11 @@ $router->get('/api/references/{type}/{id}', [ReferenceController::class, 'show']
 $router->post('/api/references/{type}', [ReferenceController::class, 'store'], ['auth']);
 $router->put('/api/references/{type}/{id}', [ReferenceController::class, 'update'], ['auth']);
 $router->delete('/api/references/{type}/{id}', [ReferenceController::class, 'destroy'], ['auth']);
+
+// Персональные цвета собственников (для легенды)
+$router->get('/api/owners/colors', [OwnerColorController::class, 'index'], ['auth']);
+$router->put('/api/owners/colors/{id}', [OwnerColorController::class, 'update'], ['auth']);
+$router->delete('/api/owners/colors/{id}', [OwnerColorController::class, 'destroy'], ['auth']);
 
 // Колодцы
 $router->get('/api/wells', [WellController::class, 'index'], ['auth']);

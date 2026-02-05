@@ -110,6 +110,8 @@ class ChannelController extends BaseController
      */
     public function geojson(): void
     {
+        $user = Auth::user();
+        $uid = (int) ($user['id'] ?? 0);
         $filters = $this->buildFilters([
             'owner_id' => 'cd.owner_id',
             'type_id' => 'cd.type_id',
@@ -130,7 +132,7 @@ class ChannelController extends BaseController
         $sql = "SELECT cd.id, cd.number, 
                        ST_AsGeoJSON(cd.geom_wgs84)::json as geometry,
                        cd.owner_id, cd.type_id, cd.status_id, cd.length_m,
-                       o.name as owner_name, o.short_name as owner_short_name, o.color as owner_color,
+                       o.name as owner_name, o.short_name as owner_short_name, COALESCE(uoc.color, o.color) as owner_color,
                        ot.name as type_name, ot.color as type_color,
                        os.code as status_code, os.name as status_name, os.color as status_color,
                        sw.number as start_well,
@@ -138,12 +140,14 @@ class ChannelController extends BaseController
                        (SELECT COUNT(*) FROM cable_channels WHERE direction_id = cd.id) as channels
                 FROM channel_directions cd
                 LEFT JOIN owners o ON cd.owner_id = o.id
+                LEFT JOIN user_owner_colors uoc ON uoc.owner_id = o.id AND uoc.user_id = :uid
                 LEFT JOIN object_types ot ON cd.type_id = ot.id
                 LEFT JOIN object_status os ON cd.status_id = os.id
                 LEFT JOIN wells sw ON cd.start_well_id = sw.id
                 LEFT JOIN wells ew ON cd.end_well_id = ew.id
                 WHERE {$where}";
         
+        $params['uid'] = $uid;
         $data = $this->db->fetchAll($sql, $params);
 
         $features = [];

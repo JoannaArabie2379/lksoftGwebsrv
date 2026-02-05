@@ -647,6 +647,24 @@ const API = {
     },
 
     // ========================
+    // Собственники: персональные цвета (для легенды)
+    // ========================
+
+    owners: {
+        colors() {
+            return API.get('/owners/colors');
+        },
+
+        setColor(ownerId, color) {
+            return API.put(`/owners/colors/${ownerId}`, { color });
+        },
+
+        resetColor(ownerId) {
+            return API.delete(`/owners/colors/${ownerId}`);
+        },
+    },
+
+    // ========================
     // Импорт
     // ========================
 

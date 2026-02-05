@@ -3666,6 +3666,139 @@ const App = {
         }, 5000);
     },
 
+    // ========================
+    // Карта: множественный выбор -> массовое редактирование
+    // ========================
+
+    async showMapBulkEditModal() {
+        const list = (typeof MapManager !== 'undefined' && typeof MapManager.getMultiSelectedList === 'function')
+            ? MapManager.getMultiSelectedList()
+            : [];
+        if (!list.length) {
+            this.notify('Нет выбранных объектов', 'warning');
+            return;
+        }
+
+        const content = `
+            <form id="map-bulk-edit-form">
+                <div class="form-group">
+                    <label>Выбрано объектов</label>
+                    <input type="text" value="${list.length}" disabled style="background: var(--bg-tertiary);">
+                    <p class="text-muted">Используйте Ctrl+клик на карте для множественного выбора.</p>
+                </div>
+                <div class="form-group">
+                    <label>Собственник</label>
+                    <select id="bulk-owner-select">
+                        <option value="">(не менять)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Состояние</label>
+                    <select id="bulk-status-select">
+                        <option value="">(не менять)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Примечания</label>
+                    <textarea id="bulk-notes" rows="3" placeholder="(не менять)"></textarea>
+                    <label style="display:flex; align-items:center; gap:8px; margin-top:8px; color: var(--text-secondary);">
+                        <input type="checkbox" id="bulk-clear-notes">
+                        Очистить примечания
+                    </label>
+                </div>
+            </form>
+        `;
+        const footer = `
+            <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+            <button class="btn btn-primary" onclick="App.applyMapBulkEdit()">
+                <i class="fas fa-check"></i> Применить
+            </button>
+        `;
+        this.showModal('Массовое редактирование', content, footer);
+
+        // Подгружаем справочники для селектов
+        try {
+            const [ownersResp, statusesResp] = await Promise.all([
+                API.references.all('owners'),
+                API.references.all('object_status'),
+            ]);
+            if (ownersResp?.success && document.getElementById('bulk-owner-select')) {
+                document.getElementById('bulk-owner-select').innerHTML =
+                    '<option value="">(не менять)</option>' +
+                    ownersResp.data.map(o => `<option value="${o.id}">${this.escapeHtml(o.name || '')}</option>`).join('');
+            }
+            if (statusesResp?.success && document.getElementById('bulk-status-select')) {
+                document.getElementById('bulk-status-select').innerHTML =
+                    '<option value="">(не менять)</option>' +
+                    statusesResp.data.map(s => `<option value="${s.id}">${this.escapeHtml(s.name || '')}</option>`).join('');
+            }
+        } catch (_) {
+            // ignore
+        }
+    },
+
+    async applyMapBulkEdit() {
+        const list = (typeof MapManager !== 'undefined' && typeof MapManager.getMultiSelectedList === 'function')
+            ? MapManager.getMultiSelectedList()
+            : [];
+        if (!list.length) {
+            this.notify('Нет выбранных объектов', 'warning');
+            return;
+        }
+
+        const ownerId = document.getElementById('bulk-owner-select')?.value || '';
+        const statusId = document.getElementById('bulk-status-select')?.value || '';
+        const notes = document.getElementById('bulk-notes')?.value ?? '';
+        const clearNotes = !!document.getElementById('bulk-clear-notes')?.checked;
+
+        const patch = {};
+        if (ownerId) patch.owner_id = ownerId;
+        if (statusId) patch.status_id = statusId;
+        if (clearNotes) patch.notes = '';
+        else if (String(notes).trim() !== '') patch.notes = String(notes);
+
+        if (!Object.keys(patch).length) {
+            this.notify('Не выбрано ни одного поля для изменения', 'warning');
+            return;
+        }
+
+        const updateFnByType = {
+            well: (id, data) => API.wells.update(id, data),
+            channel_direction: (id, data) => API.channelDirections.update(id, data),
+            marker_post: (id, data) => API.markerPosts.update(id, data),
+            unified_cable: (id, data) => API.unifiedCables.update(id, data),
+            ground_cable: (id, data) => API.cables.update('ground', id, data),
+            aerial_cable: (id, data) => API.cables.update('aerial', id, data),
+            duct_cable: (id, data) => API.cables.update('duct', id, data),
+        };
+
+        const results = { ok: 0, failed: 0 };
+        for (const item of list) {
+            const type = item?.objectType;
+            const id = item?.properties?.id;
+            const fn = updateFnByType[type];
+            if (!fn || !id) {
+                results.failed += 1;
+                continue;
+            }
+            try {
+                const resp = await fn(id, patch);
+                if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+                results.ok += 1;
+            } catch (_) {
+                results.failed += 1;
+            }
+        }
+
+        this.hideModal();
+        if (results.failed) this.notify(`Обновлено: ${results.ok}, ошибок: ${results.failed}`, 'warning');
+        else this.notify(`Обновлено: ${results.ok}`, 'success');
+
+        try { MapManager.clearMultiSelection?.(); } catch (_) {}
+        try { MapManager.loadAllLayers?.(); } catch (_) {}
+        try { this.loadObjects?.(); } catch (_) {}
+    },
+
     /**
      * Модальное окно добавления объекта
      */

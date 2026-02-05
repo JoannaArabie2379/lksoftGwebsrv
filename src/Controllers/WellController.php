@@ -69,6 +69,8 @@ class WellController extends BaseController
      */
     public function geojson(): void
     {
+        $user = Auth::user();
+        $uid = (int) ($user['id'] ?? 0);
         $filters = $this->buildFilters([
             'owner_id' => 'w.owner_id',
             'type_id' => 'w.type_id',
@@ -90,17 +92,19 @@ class WellController extends BaseController
         $sql = "SELECT w.id, w.number, 
                        ST_AsGeoJSON(w.geom_wgs84)::json as geometry,
                        w.owner_id, w.type_id, w.kind_id, w.status_id,
-                       o.name as owner_name, o.short_name as owner_short_name, o.color as owner_color,
+                       o.name as owner_name, o.short_name as owner_short_name, COALESCE(uoc.color, o.color) as owner_color,
                        ot.name as type_name, ot.color as type_color,
                        ok.code as kind_code, ok.name as kind_name,
                        os.code as status_code, os.name as status_name, os.color as status_color
                 FROM wells w
                 LEFT JOIN owners o ON w.owner_id = o.id
+                LEFT JOIN user_owner_colors uoc ON uoc.owner_id = o.id AND uoc.user_id = :uid
                 LEFT JOIN object_types ot ON w.type_id = ot.id
                 LEFT JOIN object_kinds ok ON w.kind_id = ok.id
                 LEFT JOIN object_status os ON w.status_id = os.id
                 WHERE {$where}";
         
+        $params['uid'] = $uid;
         $data = $this->db->fetchAll($sql, $params);
 
         $features = [];
