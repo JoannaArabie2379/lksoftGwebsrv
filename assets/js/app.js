@@ -4444,13 +4444,20 @@ const App = {
                 }
             };
 
-            const pickUserDefault = (selectEl, value) => {
+            const pickUserDefault = (selectEl, value, opts = {}) => {
                 if (!selectEl) return false;
                 if (selectEl.dataset?.value) return false; // edit form value wins
-                if (selectEl.value) return false;
                 if (!value) return false;
                 const exists = Array.from(selectEl.options).some(o => String(o.value) === String(value));
                 if (!exists) return false;
+                // Если уже выбрано значение, обычно не трогаем.
+                // Но для селектов, где система сама подставляет is_default, персональный дефолт должен иметь приоритет.
+                if (selectEl.value) {
+                    const canOverrideDefault =
+                        !!opts.forceIfDefault &&
+                        (selectEl.selectedOptions?.[0]?.dataset?.isDefault === '1');
+                    if (!canOverrideDefault) return false;
+                }
                 selectEl.value = String(value);
                 selectEl.dispatchEvent(new Event('change'));
                 return true;
@@ -4535,7 +4542,7 @@ const App = {
                         filtered.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
                     // Персональный дефолт для каналов берём из map-defaults: default_ref_channel
                     const udef = this.settings?.default_ref_channel || '';
-                    if (!pickUserDefault(kindSelect, udef)) pickDefault(kindSelect);
+                    if (!pickUserDefault(kindSelect, udef, { forceIfDefault: true })) pickDefault(kindSelect);
                     kindsHandled = true;
                 }
 
@@ -4565,7 +4572,7 @@ const App = {
                     : (objectTypeCode ? `default_ref_${String(objectTypeCode)}` : '');
                 const udefKind = (refKey && this.settings?.[refKey]) ? this.settings?.[refKey] : (byObjKindLegacy[objectType] || '');
                 if (kindSelect) {
-                    if (!pickUserDefault(kindSelect, udefKind)) pickDefault(kindSelect);
+                    if (!pickUserDefault(kindSelect, udefKind, { forceIfDefault: true })) pickDefault(kindSelect);
                 }
             }
             
