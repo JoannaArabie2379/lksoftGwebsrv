@@ -43,12 +43,10 @@ const MapManager = {
     ownersLegendEl: null,
     _ownersLegendCache: null,
     _lastGroupFilters: null,
-    // Внешний растровый слой WMTS (по ссылке из настроек)
+    // Внешний растровый слой (спутник Yandex)
     externalWmtsEnabled: false,
     externalWmtsLayer: null,
     externalWmtsPaneName: 'external-wmts',
-    _externalWmtsCapabilitiesUrl: null,
-    _externalWmtsTileTemplate: null,
     initialViewLocked: true,
 
     // Режим группы (показываем только объекты группы)
@@ -169,75 +167,6 @@ const MapManager = {
         });
     },
 
-    getExternalWmtsCapabilitiesUrl() {
-        try {
-            if (typeof App === 'undefined') return '';
-            return (App?.settings?.url_wmts || '').toString().trim();
-        } catch (_) {
-            return '';
-        }
-    },
-
-    async ensureExternalWmtsTemplate() {
-        const url = this.getExternalWmtsCapabilitiesUrl();
-        if (!url) throw new Error('wmts_url_missing');
-
-        // Пересоздаём если URL изменился
-        if (this._externalWmtsCapabilitiesUrl && this._externalWmtsCapabilitiesUrl !== url) {
-            this._externalWmtsCapabilitiesUrl = null;
-            this._externalWmtsTileTemplate = null;
-            if (this.externalWmtsLayer) {
-                try { this.map?.removeLayer?.(this.externalWmtsLayer); } catch (_) {}
-            }
-            this.externalWmtsLayer = null;
-        }
-
-        if (this._externalWmtsTileTemplate && this._externalWmtsCapabilitiesUrl === url) {
-            return this._externalWmtsTileTemplate;
-        }
-
-        this._externalWmtsCapabilitiesUrl = url;
-
-        // Загружаем capabilities (в браузере, CORS должен быть разрешён сервером WMTS)
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 12000);
-        let xmlText = '';
-        try {
-            const resp = await fetch(url, { method: 'GET', signal: ctrl.signal });
-            if (!resp.ok) throw new Error('wmts_fetch_failed');
-            xmlText = await resp.text();
-        } finally {
-            clearTimeout(t);
-        }
-
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(xmlText, 'text/xml');
-
-        // Ищем ResourceURL template для tile
-        const resourceUrls = Array.from(xml.getElementsByTagName('ResourceURL') || []);
-        const tileRes = resourceUrls.find((n) => (n.getAttribute('resourceType') || '').toLowerCase() === 'tile');
-        let template = tileRes?.getAttribute('template') || '';
-
-        // Иногда template лежит в другом namespace => попробуем querySelectorAll
-        if (!template) {
-            const nodes = Array.from(xml.querySelectorAll('ResourceURL[resourceType="tile"]') || []);
-            template = nodes?.[0]?.getAttribute('template') || '';
-        }
-
-        if (!template) {
-            throw new Error('wmts_no_template');
-        }
-
-        // WMTS placeholders -> Leaflet placeholders
-        template = template
-            .replaceAll('{TileMatrix}', '{z}')
-            .replaceAll('{TileRow}', '{y}')
-            .replaceAll('{TileCol}', '{x}');
-
-        this._externalWmtsTileTemplate = template;
-        return template;
-    },
-
     async setExternalWmtsEnabled(enabled) {
         this.externalWmtsEnabled = !!enabled;
         if (!this.map) return;
@@ -249,12 +178,13 @@ const MapManager = {
             return;
         }
 
-        const template = await this.ensureExternalWmtsTemplate();
+        const template = 'https://core-sat.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}';
         if (!this.externalWmtsLayer) {
             this.externalWmtsLayer = L.tileLayer(template, {
                 pane: this.externalWmtsPaneName,
                 maxZoom: 22,
                 crossOrigin: true,
+                attribution: '&copy; Yandex',
             });
         }
         try {
@@ -268,14 +198,11 @@ const MapManager = {
         try {
             await this.setExternalWmtsEnabled(!this.externalWmtsEnabled);
             if (typeof App !== 'undefined') {
-                App.notify(this.externalWmtsEnabled ? 'WMTS слой включён' : 'WMTS слой выключен', 'info');
+                App.notify(this.externalWmtsEnabled ? 'Спутниковый слой включён' : 'Спутниковый слой выключен', 'info');
             }
         } catch (e) {
             if (typeof App !== 'undefined') {
-                const msg = (e?.message === 'wmts_url_missing')
-                    ? 'Не задан путь к WMTS в настройках'
-                    : 'Не удалось включить WMTS слой (проверьте доступность и CORS)';
-                App.notify(msg, 'error');
+                App.notify('Не удалось включить спутниковый слой', 'error');
             }
             this.externalWmtsEnabled = false;
             if (this.externalWmtsLayer) {

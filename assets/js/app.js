@@ -3199,7 +3199,6 @@ const App = {
         const fsDirLen = document.getElementById('settings-font-size-direction-length');
         const geo = document.getElementById('settings-url-geoproj');
         const cad = document.getElementById('settings-url-cadastre');
-        const wmts = document.getElementById('settings-url-wmts');
         const entryKind = document.getElementById('settings-well-entry-kind-code');
         const hkDir = document.getElementById('settings-hotkey-add-direction');
         const hkWell = document.getElementById('settings-hotkey-add-well');
@@ -3224,7 +3223,6 @@ const App = {
         if (fsDirLen) fsDirLen.value = (this.settings.font_size_direction_length_label ?? 12);
         if (geo) geo.value = (this.settings.url_geoproj ?? '');
         if (cad) cad.value = (this.settings.url_cadastre ?? '');
-        if (wmts) wmts.value = (this.settings.url_wmts ?? '');
         if (hkDir) hkDir.value = (this.settings.hotkey_add_direction ?? '');
         if (hkWell) hkWell.value = (this.settings.hotkey_add_well ?? '');
         if (hkMarker) hkMarker.value = (this.settings.hotkey_add_marker ?? '');
@@ -3269,7 +3267,6 @@ const App = {
         const fsDirLen = document.getElementById('settings-font-size-direction-length')?.value;
         const geo = document.getElementById('settings-url-geoproj')?.value;
         const cad = document.getElementById('settings-url-cadastre')?.value;
-        const wmts = document.getElementById('settings-url-wmts')?.value;
         const entryKind = document.getElementById('settings-well-entry-kind-code')?.value;
         const hkDir = document.getElementById('settings-hotkey-add-direction')?.value;
         const hkWell = document.getElementById('settings-hotkey-add-well')?.value;
@@ -3306,7 +3303,6 @@ const App = {
             font_size_direction_length_label: fsDirLen,
             url_geoproj: geo,
             url_cadastre: cad,
-            url_wmts: wmts,
             well_entry_point_kind_code: (entryKind ?? '').toString(),
         };
         try {
