@@ -16,6 +16,8 @@ const App = {
     selectedObjectIds: new Set(),
     _contractsPanelLoaded: false,
     _mapDefaultsCache: null,
+    _layerPrefsSaveTimer: null,
+    _suppressLayerPrefSave: false,
 
     // ТУ режим (на карте): создаваемые объекты -> planned + автопривязка к выбранному ТУ
     tuModeEnabled: false,
@@ -108,8 +110,11 @@ const App = {
         // Подтягиваем цвета типов объектов (слои + отрисовка на карте)
         this.refreshObjectTypeColors().catch(() => {});
 
-        // Применяем начальную видимость слоёв по чекбоксам
+        // Применяем начальную видимость слоёв (с учётом персональных настроек пользователя)
+        this._suppressLayerPrefSave = true;
+        this.applyLayerPreferencesFromSettings();
         document.querySelectorAll('.layer-item input').forEach(input => this.handleLayerToggle(input));
+        this._suppressLayerPrefSave = false;
 
         // Загружаем справочники для фильтров (не блокируем основной поток)
         this.loadFilterOptions().catch(err => console.error('Ошибка загрузки фильтров:', err));
@@ -146,6 +151,75 @@ const App = {
         const linkCad = document.getElementById('link-cadastre');
         if (linkGeo && g) linkGeo.href = g;
         if (linkCad && c) linkCad.href = c;
+    },
+
+    /**
+     * Слои карты: применить персональные настройки (если есть)
+     * Формат settings.map_layers: CSV internal layer names (wells,channels,markers,groundCables,aerialCables,ductCables)
+     */
+    applyLayerPreferencesFromSettings() {
+        const raw = (this.settings?.map_layers ?? '').toString().trim();
+        if (!raw) return;
+
+        const enabled = new Set(
+            raw.split(',')
+                .map(s => (s || '').toString().trim())
+                .filter(Boolean)
+        );
+
+        const layerToCheckboxId = {
+            wells: 'layer-wells',
+            channels: 'layer-channels',
+            markers: 'layer-markers',
+            groundCables: 'layer-ground-cables',
+            aerialCables: 'layer-aerial-cables',
+            ductCables: 'layer-duct-cables',
+        };
+
+        Object.entries(layerToCheckboxId).forEach(([layerName, checkboxId]) => {
+            const cb = document.getElementById(checkboxId);
+            if (!cb) return;
+            cb.checked = enabled.has(layerName);
+        });
+    },
+
+    /**
+     * Слои карты: сериализация текущих чекбоксов в CSV
+     */
+    serializeLayerPreferences() {
+        const layerToCheckboxId = {
+            wells: 'layer-wells',
+            channels: 'layer-channels',
+            markers: 'layer-markers',
+            groundCables: 'layer-ground-cables',
+            aerialCables: 'layer-aerial-cables',
+            ductCables: 'layer-duct-cables',
+        };
+
+        const enabled = [];
+        Object.entries(layerToCheckboxId).forEach(([layerName, checkboxId]) => {
+            const cb = document.getElementById(checkboxId);
+            if (cb && cb.checked) enabled.push(layerName);
+        });
+        return enabled.join(',');
+    },
+
+    /**
+     * Слои карты: сохранить персональные настройки (debounce)
+     */
+    saveLayerPreferencesDebounced() {
+        if (this._suppressLayerPrefSave) return;
+        if (this._layerPrefsSaveTimer) clearTimeout(this._layerPrefsSaveTimer);
+        this._layerPrefsSaveTimer = setTimeout(async () => {
+            const value = this.serializeLayerPreferences();
+            try {
+                const resp = await API.settings.update({ map_layers: value });
+                if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+                this.settings.map_layers = value;
+            } catch (_) {
+                // ignore
+            }
+        }, 250);
     },
 
     /**
@@ -687,6 +761,7 @@ const App = {
         const layerName = layerMap[input.id];
         if (layerName) {
             MapManager.toggleLayer(layerName, input.checked);
+            this.saveLayerPreferencesDebounced();
         }
     },
 
@@ -3812,36 +3887,43 @@ const App = {
         const el = hostEl || document.getElementById('map-defaults');
         if (!el) return;
 
+        // Перечитаем настройки, чтобы показать актуальные персональные дефолты
+        await this.loadSettings().catch(() => {});
+
         // Загружаем справочники (кеш)
         if (!this._mapDefaultsCache) {
             try {
-                const [typesResp, statusesResp, ownersResp, cableTypesResp, cableCatalogResp] = await Promise.all([
+                const [objectTypesResp, objectKindsResp, statusesResp, ownersResp, cableTypesResp, cableCatalogResp] = await Promise.all([
                     API.references.all('object_types'),
+                    API.references.all('object_kinds'),
                     API.references.all('object_status'),
                     API.references.all('owners'),
                     API.references.all('cable_types'),
                     API.references.all('cable_catalog'),
                 ]);
                 this._mapDefaultsCache = {
-                    types: typesResp?.data || [],
+                    objectTypes: objectTypesResp?.data || [],
+                    objectKinds: objectKindsResp?.data || [],
                     statuses: statusesResp?.data || [],
                     owners: ownersResp?.data || [],
                     cableTypes: cableTypesResp?.data || [],
                     cableCatalog: cableCatalogResp?.data || [],
                 };
             } catch (_) {
-                this._mapDefaultsCache = { types: [], statuses: [], owners: [], cableTypes: [], cableCatalog: [] };
+                this._mapDefaultsCache = { objectTypes: [], objectKinds: [], statuses: [], owners: [], cableTypes: [], cableCatalog: [] };
             }
         }
 
-        const { types, statuses, owners, cableTypes, cableCatalog } = this._mapDefaultsCache;
+        const { objectTypes, objectKinds, statuses, owners, cableTypes, cableCatalog } = this._mapDefaultsCache;
 
-        const filterTypes = (kind) => {
-            const t = (types || []);
-            if (kind === 'direction') return t.filter(x => (x.code || '') === 'channel' || String(x.name || '').toLowerCase().includes('направ'));
-            if (kind === 'well') return t.filter(x => (x.code || '') === 'well' || String(x.name || '').toLowerCase().includes('колод'));
-            if (kind === 'marker') return t.filter(x => (x.code || '') === 'marker' || String(x.name || '').toLowerCase().includes('столб'));
-            return t;
+        // Направление/Колодец/Столбик: берём из "Типы объектов" (object_kinds),
+        // фильтруем по object_types.code (channel/well/marker)
+        const typeIdByCode = {};
+        (objectTypes || []).forEach(t => { if (t?.code) typeIdByCode[String(t.code)] = t.id; });
+        const kindsByTypeCode = (typeCode) => {
+            const typeId = typeIdByCode[String(typeCode || '')];
+            if (!typeId) return [];
+            return (objectKinds || []).filter(k => String(k.object_type_id) === String(typeId));
         };
 
         const getDefaultByIsDefault = (arr) => (arr || []).find(x => !!x.is_default)?.id || '';
@@ -3850,9 +3932,9 @@ const App = {
             return v ? v : (fallbackId ? String(fallbackId) : '');
         };
 
-        const curDirectionType = getCurrent('default_type_id_direction', getDefaultByIsDefault(filterTypes('direction')));
-        const curWellType = getCurrent('default_type_id_well', getDefaultByIsDefault(filterTypes('well')));
-        const curMarkerType = getCurrent('default_type_id_marker', getDefaultByIsDefault(filterTypes('marker')));
+        const curDirectionKind = getCurrent('default_kind_id_direction', getDefaultByIsDefault(kindsByTypeCode('channel')));
+        const curWellKind = getCurrent('default_kind_id_well', getDefaultByIsDefault(kindsByTypeCode('well')));
+        const curMarkerKind = getCurrent('default_kind_id_marker', getDefaultByIsDefault(kindsByTypeCode('marker')));
         const curStatus = getCurrent('default_status_id', getDefaultByIsDefault(statuses));
         const curOwner = getCurrent('default_owner_id', getDefaultByIsDefault(owners));
         const curCableType = getCurrent('default_cable_type_id', getDefaultByIsDefault(cableTypes));
@@ -3872,15 +3954,15 @@ const App = {
             <div class="map-defaults-title">Настройки по умолчанию</div>
             <div class="form-group">
                 <label>Направление</label>
-                <select id="md-direction-type">${options(filterTypes('direction'), curDirectionType, x => x.name || x.code || x.id)}</select>
+                <select id="md-direction-kind">${options(kindsByTypeCode('channel'), curDirectionKind, x => x.name || x.code || x.id)}</select>
             </div>
             <div class="form-group">
                 <label>Колодец</label>
-                <select id="md-well-type">${options(filterTypes('well'), curWellType, x => x.name || x.code || x.id)}</select>
+                <select id="md-well-kind">${options(kindsByTypeCode('well'), curWellKind, x => x.name || x.code || x.id)}</select>
             </div>
             <div class="form-group">
                 <label>Столбик</label>
-                <select id="md-marker-type">${options(filterTypes('marker'), curMarkerType, x => x.name || x.code || x.id)}</select>
+                <select id="md-marker-kind">${options(kindsByTypeCode('marker'), curMarkerKind, x => x.name || x.code || x.id)}</select>
             </div>
             <div class="form-group">
                 <label>Состояние</label>
@@ -3918,9 +4000,9 @@ const App = {
             });
         };
 
-        bindSave('md-direction-type', 'default_type_id_direction');
-        bindSave('md-well-type', 'default_type_id_well');
-        bindSave('md-marker-type', 'default_type_id_marker');
+        bindSave('md-direction-kind', 'default_kind_id_direction');
+        bindSave('md-well-kind', 'default_kind_id_well');
+        bindSave('md-marker-kind', 'default_kind_id_marker');
         bindSave('md-status', 'default_status_id');
         bindSave('md-owner', 'default_owner_id');
         bindSave('md-cable-type', 'default_cable_type_id');
@@ -4404,6 +4486,18 @@ const App = {
                         '<option value="">Выберите...</option>' +
                         kinds.data.map(k => `<option value="${k.id}" data-is-default="${k.is_default ? 1 : 0}">${k.name}</option>`).join('');
                     pickDefault(document.getElementById('modal-kind-select'));
+                }
+
+                // Персональные дефолты по "Тип" (object_kinds) для Колодец/Столбик/Направление
+                const kindSelect = document.getElementById('modal-kind-select');
+                const byObjKind = {
+                    wells: this.settings?.default_kind_id_well,
+                    markers: this.settings?.default_kind_id_marker,
+                    directions: this.settings?.default_kind_id_direction,
+                };
+                const udefKind = byObjKind[objectType] || '';
+                if (kindSelect) {
+                    if (!pickUserDefault(kindSelect, udefKind)) pickDefault(kindSelect);
                 }
             }
             
