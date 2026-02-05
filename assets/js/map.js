@@ -180,11 +180,28 @@ const MapManager = {
 
         const template = 'https://core-sat.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}';
         if (!this.externalWmtsLayer) {
-            this.externalWmtsLayer = L.tileLayer(template, {
+            // Важно: тайлы спутника Yandex используют TMS (ось Y инвертирована относительно XYZ).
+            // В некоторых окружениях опция Leaflet `tms:true` не применяется как ожидается,
+            // поэтому инвертируем Y явно через кастомный TileLayer.
+            const YandexSatLayer = L.TileLayer.extend({
+                getTileUrl: function (coords) {
+                    const z = this._getZoomForUrl();
+                    const x = coords.x;
+                    const max = Math.pow(2, z) - 1;
+                    const y = max - coords.y;
+                    return L.Util.template(this._url, {
+                        r: (L.Browser.retina ? '@2x' : ''),
+                        s: this._getSubdomain(coords),
+                        x,
+                        y,
+                        z,
+                    });
+                },
+            });
+
+            this.externalWmtsLayer = new YandexSatLayer(template, {
                 pane: this.externalWmtsPaneName,
                 maxZoom: 22,
-                // Yandex tiles use TMS Y-axis (inverted) — иначе слой "уезжает"
-                tms: true,
                 crossOrigin: true,
                 attribution: '&copy; Yandex',
             });
