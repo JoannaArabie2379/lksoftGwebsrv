@@ -202,8 +202,8 @@ const App = {
         // Внешний WMTS слой (кнопка в шапке)
         document.getElementById('btn-toggle-wmts')?.addEventListener('click', async (e) => {
             try {
-                await MapManager.toggleExternalWmtsLayer();
-                e.currentTarget.classList.toggle('active', !!MapManager.externalWmtsEnabled);
+                MapManager.toggleExternalWmtsLayer();
+                e.currentTarget.classList.toggle('active', !!MapManager.yandexSatelliteEnabled);
             } catch (_) {
                 // ignore
             }
