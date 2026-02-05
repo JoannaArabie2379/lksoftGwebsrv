@@ -183,6 +183,8 @@ const MapManager = {
             this.externalWmtsLayer = L.tileLayer(template, {
                 pane: this.externalWmtsPaneName,
                 maxZoom: 22,
+                // Yandex tiles use TMS Y-axis (inverted) — иначе слой "уезжает"
+                tms: true,
                 crossOrigin: true,
                 attribution: '&copy; Yandex',
             });
