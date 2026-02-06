@@ -3464,23 +3464,23 @@ const App = {
         }
 
         const columnsByType = {
-            object_types: ['code', 'name', 'description', 'reference_table', 'icon', 'color'],
+            object_types: ['code', 'name', 'description', 'reference_table', 'number_code', 'icon', 'color'],
             object_kinds: ['code', 'name', 'object_type_id', 'description', 'is_default'],
             object_status: ['code', 'name', 'color', 'description', 'sort_order', 'is_default'],
-            owners: ['code', 'name', 'short_name', 'color', 'inn', 'address', 'contact_person', 'contact_phone', 'contact_email', 'notes', 'is_default'],
+            owners: ['code', 'name', 'short_name', 'color', 'inn', 'address', 'contact_person', 'contact_phone', 'contact_email', 'notes', 'range_from', 'range_to', 'is_default'],
             contracts: ['number', 'name', 'owner_id', 'landlord_id', 'start_date', 'end_date', 'status', 'amount', 'notes', 'is_default'],
             cable_types: ['code', 'name', 'description', 'is_default'],
             cable_catalog: ['cable_type_id', 'fiber_count', 'marking', 'description', 'is_default'],
         };
 
         const labelByType = {
-            object_types: { code: 'Код', name: 'Название', description: 'Описание', reference_table: 'Справочная таблица', icon: 'Иконка', color: 'Цвет' },
+            object_types: { code: 'Код', name: 'Название', description: 'Описание', reference_table: 'Справочная таблица', number_code: 'Код номера', icon: 'Иконка', color: 'Цвет' },
             object_kinds: { code: 'Код', name: 'Название', object_type_id: 'Вид объекта', description: 'Описание', is_default: 'По умолчанию' },
             object_status: { code: 'Код', name: 'Название', color: 'Цвет', description: 'Описание', sort_order: 'Порядок', is_default: 'По умолчанию' },
             owners: {
                 code: 'Код', name: 'Название', short_name: 'Краткое название', inn: 'ИНН',
                 address: 'Адрес', contact_person: 'Контактное лицо', contact_phone: 'Телефон', contact_email: 'Email',
-                color: 'Цвет', notes: 'Примечания', is_default: 'По умолчанию'
+                color: 'Цвет', notes: 'Примечания', range_from: 'Значение С', range_to: 'Значение ДО', is_default: 'По умолчанию'
             },
             contracts: {
                 number: 'Номер', name: 'Название', owner_id: 'Арендатор', landlord_id: 'Арендодатель',
@@ -6134,6 +6134,11 @@ const App = {
                     <p class="text-muted">Определяет, из какого справочника брать варианты "типа" для данного вида объектов (используется в "Настройки по умолчанию" на карте).</p>
                 </div>
                 <div class="form-group">
+                    <label>Код номера</label>
+                    <input type="text" name="number_code" value="${data.number_code || data.code || ''}" maxlength="50" placeholder="Например: ККС, СТ, КАБ...">
+                    <p class="text-muted">Используется в формировании номера: &lt;Код номера&gt;-&lt;Код собственника&gt;-&lt;число&gt;(-суффикс).</p>
+                </div>
+                <div class="form-group">
                     <label>Иконка</label>
                     <input type="text" name="icon" value="${data.icon || ''}" placeholder="circle, line, marker...">
                     <p class="text-muted">Иконки: Font Awesome 6 (solid). Примеры: map-marker-alt, project-diagram, wave-square, broadcast-tower, route, tag.</p>
@@ -6225,6 +6230,16 @@ const App = {
                 <div class="form-group">
                     <label>Примечания</label>
                     <textarea name="notes" rows="2">${data.notes || ''}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Значение С</label>
+                    <input type="number" name="range_from" min="0" step="1" value="${(data.range_from ?? 0)}">
+                    <p class="text-muted">0 означает ручной ввод номера (диапазон 0-0).</p>
+                </div>
+                <div class="form-group">
+                    <label>Значение ДО</label>
+                    <input type="number" name="range_to" min="0" step="1" value="${(data.range_to ?? 0)}">
+                    <p class="text-muted">Диапазоны собственников не должны пересекаться.</p>
                 </div>
                 ${defaultBlock}
             `,

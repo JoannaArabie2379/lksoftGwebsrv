@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS object_types (
     description TEXT,
     -- Справочник, содержащий справочную информацию для этого вида объектов (например, object_kinds / cable_types)
     reference_table VARCHAR(100),
+    -- Код, используемый в номере объекта (префикс)
+    number_code VARCHAR(50),
     icon VARCHAR(100),
     color VARCHAR(20),
     is_default BOOLEAN NOT NULL DEFAULT FALSE,
@@ -121,6 +123,9 @@ CREATE TABLE IF NOT EXISTS owners (
     contact_phone VARCHAR(50),
     contact_email VARCHAR(255),
     notes TEXT,
+    -- Диапазоны нумерации объектов по собственнику (0-0 = ручной ввод)
+    range_from INTEGER NOT NULL DEFAULT 0,
+    range_to INTEGER NOT NULL DEFAULT 0,
     is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
