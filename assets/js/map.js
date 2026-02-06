@@ -62,6 +62,9 @@ const MapManager = {
     groupPickMode: false,
     groupPickGroupId: null,
 
+    // Режим "Набить колодец" (выбор направления)
+    stuffWellMode: false,
+
     // Цвета для слоёв
     colors: {
         wells: '#fa00fa',
@@ -1032,6 +1035,39 @@ const MapManager = {
             return;
         }
 
+        // "Набить колодец": выбираем направление
+        if (this.stuffWellMode) {
+            const pick = (h) => {
+                if (!h) return;
+                if (h.objectType !== 'channel_direction') {
+                    App.notify('Выберите объект направления', 'warning');
+                    return;
+                }
+                this.stuffWellMode = false;
+                if (this.map) this.map.getContainer().style.cursor = '';
+                document.getElementById('btn-stuff-well-map')?.classList?.toggle('active', false);
+                try { App.openStuffWellFromDirection?.(h.properties); } catch (_) {}
+            };
+
+            if (hits.length <= 1) {
+                pick(hits[0]);
+                return;
+            }
+            const content = `
+                <div style="max-height: 60vh; overflow:auto;">
+                    ${(hits || []).map((h, idx) => `
+                        <button class="btn btn-secondary btn-block" style="margin-bottom:8px;" onclick="MapManager.selectStuffWellDirectionFromHits(${idx})">
+                            ${h.title}
+                        </button>
+                    `).join('')}
+                </div>
+                <p class="text-muted" style="margin-top:8px;">Выберите направление для набивки колодца.</p>
+            `;
+            const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
+            App.showModal('Выберите направление', content, footer);
+            return;
+        }
+
         if (hits.length <= 1) {
             const h = hits[0];
             if (h) this.showObjectInfo(h.objectType, h.properties);
@@ -1050,6 +1086,30 @@ const MapManager = {
         `;
         const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
         App.showModal('Выберите объект', content, footer);
+    },
+
+    selectStuffWellDirectionFromHits(idx) {
+        const h = (this.lastClickHits || [])[idx];
+        if (!h) return;
+        App.hideModal();
+        if (h.objectType !== 'channel_direction') {
+            App.notify('Выберите объект направления', 'warning');
+            return;
+        }
+        this.stuffWellMode = false;
+        if (this.map) this.map.getContainer().style.cursor = '';
+        document.getElementById('btn-stuff-well-map')?.classList?.toggle('active', false);
+        try { App.openStuffWellFromDirection?.(h.properties); } catch (_) {}
+    },
+
+    toggleStuffWellMode() {
+        this.stuffWellMode = !this.stuffWellMode;
+        if (this.stuffWellMode) {
+            if (this.map) this.map.getContainer().style.cursor = 'crosshair';
+            App.notify('Кликните по направлению на карте, чтобы набить колодец', 'info');
+        } else {
+            if (this.map) this.map.getContainer().style.cursor = '';
+        }
     },
 
     selectObjectForMultiFromHits(idx) {

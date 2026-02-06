@@ -469,6 +469,12 @@ const App = {
         // Панель инструментов карты
         document.getElementById('btn-add-direction-map')?.addEventListener('click', () => MapManager.startAddDirectionMode());
         document.getElementById('btn-add-well-map')?.addEventListener('click', () => MapManager.startAddingObject('wells'));
+        document.getElementById('btn-stuff-well-map')?.addEventListener('click', (e) => {
+            try {
+                MapManager.toggleStuffWellMode?.();
+                e.currentTarget?.classList?.toggle('active', !!MapManager.stuffWellMode);
+            } catch (_) {}
+        });
         document.getElementById('btn-add-marker-map')?.addEventListener('click', () => MapManager.startAddingObject('markers'));
         document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
         document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
@@ -4938,6 +4944,63 @@ const App = {
             }
         } catch (error) {
             this.notify(error.message || 'Ошибка', 'error');
+        }
+    },
+
+    /**
+     * Карта: "Набить колодец" по выбранному направлению
+     */
+    async openStuffWellFromDirection(directionProps) {
+        const directionId = directionProps?.id;
+        if (!directionId) {
+            this.notify('Не удалось определить направление', 'error');
+            return;
+        }
+
+        // Открываем модалку создания колодца, но в footer вызываем специальный submit
+        this._stuffWellDirectionId = parseInt(directionId, 10);
+        this.showAddObjectModal('wells');
+
+        // Подменяем footer кнопки
+        const footer = document.getElementById('modal-footer');
+        if (footer) {
+            footer.innerHTML = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="App.submitStuffWell()">Набить колодец</button>
+            `;
+        }
+        // Дополнительная подсказка
+        this.notify('Укажите параметры нового колодца и нажмите "Набить колодец"', 'info');
+    },
+
+    async submitStuffWell() {
+        const directionId = parseInt(this._stuffWellDirectionId || 0, 10);
+        if (!directionId) {
+            this.notify('Не выбрано направление', 'error');
+            return;
+        }
+        const form = document.getElementById('add-object-form');
+        if (form?.reportValidity && !form.reportValidity()) return;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+
+        // удаляем служебное поле
+        delete data.object_type_code;
+
+        try {
+            const resp = await API.channelDirections.stuffWell(directionId, data);
+            if (resp?.success === false) {
+                this.notify(resp.message || 'Ошибка', 'error');
+                return;
+            }
+            this.hideModal();
+            this.notify('Колодец набит', 'success');
+            try { await MapManager.loadAllLayers?.(); } catch (_) {}
+            try { this.loadObjects?.(); } catch (_) {}
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка набивки колодца', 'error');
+        } finally {
+            this._stuffWellDirectionId = null;
         }
     },
 
