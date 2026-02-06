@@ -193,7 +193,6 @@ class WellController extends BaseController
         $this->checkWriteAccess();
 
         $errors = $this->request->validate([
-            'number' => 'required|string|max:50',
             'owner_id' => 'required|integer',
             'type_id' => 'required|integer',
             'kind_id' => 'required|integer',
@@ -205,9 +204,20 @@ class WellController extends BaseController
         }
 
         $data = $this->request->only([
-            'number', 'owner_id', 'type_id', 'kind_id', 'status_id',
+            'owner_id', 'type_id', 'kind_id', 'status_id',
             'depth', 'material', 'installation_date', 'notes'
         ]);
+
+        // Формирование номера (авто по диапазону собственника + опциональный суффикс)
+        $manualSeq = $this->request->input('number_seq');
+        $suffix = $this->request->input('number_suffix');
+        $data['number'] = $this->buildAutoNumber(
+            'wells',
+            (int) ($data['type_id'] ?? 0),
+            (int) ($data['owner_id'] ?? 0),
+            ($manualSeq !== null && $manualSeq !== '') ? (int) $manualSeq : null,
+            ($suffix !== null) ? (string) $suffix : null
+        );
 
         // Убедиться, что все необязательные поля присутствуют (даже если null)
         $optionalFields = ['depth', 'material', 'installation_date', 'notes'];

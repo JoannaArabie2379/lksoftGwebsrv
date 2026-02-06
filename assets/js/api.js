@@ -478,6 +478,14 @@ const API = {
         routeDirectionsGeojson(id) {
             return API.get(`/unified-cables/${id}/route-directions-geojson`);
         },
+
+        existsNumber(number, exclude_id = null) {
+            const params = { number };
+            if (exclude_id !== null && exclude_id !== undefined && exclude_id !== '') {
+                params.exclude_id = exclude_id;
+            }
+            return API.get('/unified-cables/exists', params);
+        },
     },
 
     // ========================
@@ -507,6 +515,14 @@ const API = {
 
         delete(id) {
             return API.delete(`/marker-posts/${id}`);
+        },
+
+        existsNumber(number, exclude_id = null) {
+            const params = { number };
+            if (exclude_id !== null && exclude_id !== undefined && exclude_id !== '') {
+                params.exclude_id = exclude_id;
+            }
+            return API.get('/marker-posts/exists', params);
         },
     },
 

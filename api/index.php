@@ -220,6 +220,7 @@ $router->delete('/api/cables/{type}/{id}', [CableController::class, 'destroy'], 
 
 // Унифицированные кабели (новая таблица)
 $router->get('/api/unified-cables/object-types', [UnifiedCableController::class, 'objectTypes'], ['auth']);
+$router->get('/api/unified-cables/exists', [UnifiedCableController::class, 'existsNumber'], ['auth']);
 $router->get('/api/unified-cables/geojson', [UnifiedCableController::class, 'geojson'], ['auth']);
 $router->get('/api/unified-cables/stats', [UnifiedCableController::class, 'stats'], ['auth']);
 $router->get('/api/unified-cables/export', [UnifiedCableController::class, 'export'], ['auth']);
@@ -237,6 +238,7 @@ $router->delete('/api/unified-cables/{id}', [UnifiedCableController::class, 'des
 // Столбики
 $router->get('/api/marker-posts', [MarkerPostController::class, 'index'], ['auth']);
 $router->get('/api/marker-posts/geojson', [MarkerPostController::class, 'geojson'], ['auth']);
+$router->get('/api/marker-posts/exists', [MarkerPostController::class, 'existsNumber'], ['auth']);
 $router->get('/api/marker-posts/export', [MarkerPostController::class, 'export'], ['auth']);
 $router->get('/api/marker-posts/{id}', [MarkerPostController::class, 'show'], ['auth']);
 $router->post('/api/marker-posts', [MarkerPostController::class, 'store'], ['auth']);

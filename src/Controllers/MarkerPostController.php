@@ -11,6 +11,31 @@ use App\Core\Auth;
 class MarkerPostController extends BaseController
 {
     /**
+     * GET /api/marker-posts/exists?number=...&exclude_id=...
+     * Проверка уникальности номера столбика (для UI)
+     */
+    public function existsNumber(): void
+    {
+        $number = trim((string) $this->request->query('number', ''));
+        $excludeId = (int) $this->request->query('exclude_id', 0);
+
+        if ($number === '') {
+            Response::success(['exists' => false]);
+        }
+
+        $sql = "SELECT id FROM marker_posts WHERE number = :number";
+        $params = ['number' => $number];
+        if ($excludeId > 0) {
+            $sql .= " AND id <> :exclude_id";
+            $params['exclude_id'] = $excludeId;
+        }
+        $sql .= " LIMIT 1";
+
+        $row = $this->db->fetch($sql, $params);
+        Response::success(['exists' => (bool) $row]);
+    }
+
+    /**
      * GET /api/marker-posts
      * Список столбиков
      */
@@ -227,10 +252,16 @@ class MarkerPostController extends BaseController
             'height_m', 'material', 'installation_date', 'notes'
         ]);
 
-        // number генерируется автоматически после вставки, но параметр нужен для SQL с :number
-        if (!array_key_exists('number', $data)) {
-            $data['number'] = null;
-        }
+        // Формирование номера (авто по диапазону собственника + опциональный суффикс)
+        $manualSeq = $this->request->input('number_seq');
+        $suffix = $this->request->input('number_suffix');
+        $data['number'] = $this->buildAutoNumber(
+            'marker_posts',
+            (int) ($data['type_id'] ?? 0),
+            (int) ($data['owner_id'] ?? 0),
+            ($manualSeq !== null && $manualSeq !== '') ? (int) $manualSeq : null,
+            ($suffix !== null) ? (string) $suffix : null
+        );
 
         // Убедиться, что все необязательные поля присутствуют (даже если null)
         $optionalFields = ['height_m', 'material', 'installation_date', 'notes'];
@@ -290,17 +321,6 @@ class MarkerPostController extends BaseController
 
             $stmt = $this->db->query($sql, $data);
             $id = $stmt->fetchColumn();
-
-            // Формируем номер: СТ-<код_собств>-<id>
-            $ownerCode = '';
-            if (!empty($data['owner_id'])) {
-                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
-                $ownerCode = $owner['code'] ?? '';
-            }
-            if ($ownerCode) {
-                $number = "СТ-{$ownerCode}-{$id}";
-                $this->db->update('marker_posts', ['number' => $number], 'id = :id', ['id' => $id]);
-            }
 
             $this->db->commit();
 

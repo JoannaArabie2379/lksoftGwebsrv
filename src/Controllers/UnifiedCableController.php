@@ -358,20 +358,16 @@ class UnifiedCableController extends BaseController
             }
         }
 
-        // number генерируется автоматически после вставки, но параметр нужен для SQL с :number
-        if (!array_key_exists('number', $data)) {
-            $data['number'] = null;
-        }
-
-        // Для безопасности: если в БД number NOT NULL/UNIQUE, подставляем временное значение
-        $ownerCodeForNumber = '';
-        if (!empty($data['owner_id'])) {
-            $ownerTmp = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
-            $ownerCodeForNumber = $ownerTmp['code'] ?? '';
-        }
-        if ($ownerCodeForNumber && empty($data['number'])) {
-            $data['number'] = "КАБ-{$ownerCodeForNumber}-TMP-" . date('YmdHis') . '-' . random_int(100, 999);
-        }
+        // Формирование номера (авто по диапазону собственника + опциональный суффикс)
+        $manualSeq = $this->request->input('number_seq');
+        $suffix = $this->request->input('number_suffix');
+        $data['number'] = $this->buildAutoNumber(
+            'cables',
+            (int) ($data['object_type_id'] ?? 0),
+            (int) ($data['owner_id'] ?? 0),
+            ($manualSeq !== null && $manualSeq !== '') ? (int) $manualSeq : null,
+            ($suffix !== null) ? (string) $suffix : null
+        );
 
         // Убедиться, что все необязательные поля присутствуют (даже если null)
         $optionalFields = ['contract_id', 'length_declared', 'installation_date', 'notes'];
@@ -477,17 +473,6 @@ class UnifiedCableController extends BaseController
                 
                 // Рассчитываем длину на основе направлений
                 $this->updateDuctCableLength($id);
-            }
-
-            // Формируем номер: КАБ-<код_собств>-<id>
-            $ownerCode = '';
-            if (!empty($data['owner_id'])) {
-                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
-                $ownerCode = $owner['code'] ?? '';
-            }
-            if ($ownerCode) {
-                $number = "КАБ-{$ownerCode}-{$id}";
-                $this->db->update('cables', ['number' => $number], 'id = :id', ['id' => $id]);
             }
 
             $this->db->commit();
@@ -699,9 +684,36 @@ class UnifiedCableController extends BaseController
     public function objectTypes(): void
     {
         $types = $this->db->fetchAll(
-            "SELECT id, code, name, color FROM object_types WHERE code IN ('cable_ground', 'cable_aerial', 'cable_duct')"
+            "SELECT id, code, name, color, COALESCE(NULLIF(number_code,''), code) as number_code
+             FROM object_types
+             WHERE code IN ('cable_ground', 'cable_aerial', 'cable_duct')"
         );
         Response::success($types);
+    }
+
+    /**
+     * GET /api/unified-cables/exists?number=...&exclude_id=...
+     * Проверка уникальности номера кабеля (для UI)
+     */
+    public function existsNumber(): void
+    {
+        $number = trim((string) $this->request->query('number', ''));
+        $excludeId = (int) $this->request->query('exclude_id', 0);
+
+        if ($number === '') {
+            Response::success(['exists' => false]);
+        }
+
+        $sql = "SELECT id FROM cables WHERE number = :number";
+        $params = ['number' => $number];
+        if ($excludeId > 0) {
+            $sql .= " AND id <> :exclude_id";
+            $params['exclude_id'] = $excludeId;
+        }
+        $sql .= " LIMIT 1";
+
+        $row = $this->db->fetch($sql, $params);
+        Response::success(['exists' => (bool) $row]);
     }
 
     /**

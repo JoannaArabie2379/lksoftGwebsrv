@@ -216,6 +216,147 @@ abstract class BaseController
         ];
     }
 
+    // ========================
+    // Нумерация объектов (авто-номера)
+    // ========================
+
+    protected function sanitizeNumberSuffix(?string $suffix): string
+    {
+        $s = trim((string) ($suffix ?? ''));
+        if ($s === '') return '';
+        // Разрешаем буквы/цифры/подчёркивание (без дефисов, чтобы не ломать разбор номера)
+        $s = preg_replace('/[^0-9A-Za-zА-Яа-яЁё_]/u', '', $s);
+        $s = (string) $s;
+        if (mb_strlen($s) > 5) {
+            $s = mb_substr($s, 0, 5);
+        }
+        return $s;
+    }
+
+    protected function getOwnerNumbering(int $ownerId): array
+    {
+        $row = $this->db->fetch(
+            "SELECT id, code, range_from, range_to FROM owners WHERE id = :id",
+            ['id' => (int) $ownerId]
+        );
+        if (!$row) {
+            Response::error('Собственник не найден', 404);
+        }
+        return [
+            'code' => (string) ($row['code'] ?? ''),
+            'from' => (int) ($row['range_from'] ?? 0),
+            'to' => (int) ($row['range_to'] ?? 0),
+        ];
+    }
+
+    protected function getObjectTypeNumberCodeById(int $typeId): array
+    {
+        $row = $this->db->fetch(
+            "SELECT id, code, COALESCE(NULLIF(number_code,''), code) as number_code FROM object_types WHERE id = :id",
+            ['id' => (int) $typeId]
+        );
+        if (!$row) {
+            Response::error('Вид объекта не найден', 404);
+        }
+        return [
+            'code' => (string) ($row['code'] ?? ''),
+            'number_code' => (string) ($row['number_code'] ?? ($row['code'] ?? '')),
+        ];
+    }
+
+    protected function buildAutoNumber(
+        string $table,
+        int $typeId,
+        int $ownerId,
+        ?int $manualSeq,
+        ?string $suffix,
+        ?int $excludeId = null
+    ): string {
+        // Whitelist, чтобы нельзя было подсунуть произвольную таблицу
+        $allowedTables = ['wells', 'marker_posts', 'cables'];
+        if (!in_array($table, $allowedTables, true)) {
+            Response::error('Некорректная таблица для нумерации', 500);
+        }
+
+        $typeColumnByTable = [
+            'wells' => 'type_id',
+            'marker_posts' => 'type_id',
+            'cables' => 'object_type_id',
+        ];
+        $typeColumn = $typeColumnByTable[$table] ?? null;
+        if (!$typeColumn) {
+            Response::error('Некорректная конфигурация нумерации', 500);
+        }
+
+        $owner = $this->getOwnerNumbering($ownerId);
+        $ot = $this->getObjectTypeNumberCodeById($typeId);
+        $numberCode = trim($ot['number_code']);
+        $ownerCode = trim($owner['code']);
+        if ($numberCode === '' || $ownerCode === '') {
+            Response::error('Недостаточно данных для формирования номера', 422);
+        }
+
+        $rf = (int) $owner['from'];
+        $rt = (int) $owner['to'];
+        $sfx = $this->sanitizeNumberSuffix($suffix);
+
+        $seq = null;
+        if ($rf === 0 && $rt === 0) {
+            // ручной режим
+            $seq = (int) ($manualSeq ?? 0);
+            if ($seq <= 0) {
+                Response::error('Введите номер (целое положительное)', 422);
+            }
+        } else {
+            // авто режим: берём минимальный свободный в диапазоне
+            $like = $numberCode . '-' . $ownerCode . '-%';
+            $row = $this->db->fetch(
+                "WITH used AS (
+                    SELECT DISTINCT (split_part(number, '-', 3))::int AS n
+                    FROM {$table}
+                    WHERE number LIKE :like
+                      AND {$typeColumn} = :type_id
+                      AND split_part(number, '-', 3) ~ '^[0-9]+$'
+                )
+                SELECT gs AS n
+                FROM generate_series(:rf, :rt) gs
+                LEFT JOIN used u ON u.n = gs
+                WHERE u.n IS NULL
+                ORDER BY gs
+                LIMIT 1",
+                ['like' => $like, 'type_id' => (int) $typeId, 'rf' => $rf, 'rt' => $rt]
+            );
+            if (!$row) {
+                Response::error("Диапазон нумерации исчерпан для собственника {$ownerCode}", 422);
+            }
+            $seq = (int) ($row['n'] ?? 0);
+            if ($seq <= 0) {
+                Response::error('Не удалось подобрать номер', 500);
+            }
+        }
+
+        $num = "{$numberCode}-{$ownerCode}-{$seq}";
+        if ($sfx !== '') $num .= "-{$sfx}";
+
+        // Уникальность в пределах таблицы
+        $sql = "SELECT id FROM {$table} WHERE number = :n";
+        $params = ['n' => $num];
+        if (!empty($excludeId)) {
+            $sql .= " AND id <> :id";
+            $params['id'] = (int) $excludeId;
+        }
+        // Дополнительно ограничиваем уникальность в рамках вида объекта (таблица может хранить разные object_type_id)
+        $sql .= " AND {$typeColumn} = :type_id";
+        $params['type_id'] = (int) $typeId;
+        $sql .= " LIMIT 1";
+        $exists = $this->db->fetch($sql, $params);
+        if ($exists) {
+            Response::error('Объект с таким номером уже существует', 422);
+        }
+
+        return $num;
+    }
+
     /**
      * Трансформация координат WGS84 <-> МСК86
      */

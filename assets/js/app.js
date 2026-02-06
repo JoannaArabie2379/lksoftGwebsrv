@@ -4094,17 +4094,17 @@ const App = {
         let formHtml = '';
 
         if (type === 'wells') {
-            const numberPrefixLabel = 'ККС';
             formHtml = `
                 <form id="add-object-form">
                     <input type="hidden" name="object_type_code" value="${objectTypeCodes[type] || ''}">
                     <div class="form-group">
                         <label>Номер *</label>
-                        <div style="display: flex; gap: 8px;">
-                            <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 180px; background: var(--bg-tertiary);" value="${numberPrefixLabel}-">
-                            <input type="text" name="number_suffix" id="modal-number-suffix" required placeholder="Например: ТУ-01" style="flex: 1;">
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="text" id="modal-number-prefix" readonly style="flex: 0 0 200px; background: var(--bg-tertiary);" value="...">
+                            <input type="number" name="number_seq" id="modal-number-seq" min="1" step="1" placeholder="Авто" style="flex: 0 0 140px;">
+                            <input type="text" name="number_suffix" id="modal-number-suffix" maxlength="5" placeholder="Суффикс (до 5)" style="flex: 1;">
                         </div>
-                        <p class="text-muted">Префикс формируется автоматически по собственнику</p>
+                        <p class="text-muted">Номер формируется автоматически по собственнику и виду объекта. Если у собственника диапазон 0-0 — номер можно ввести вручную.</p>
                     </div>
                     <div id="coords-wgs84-inputs">
                         <div class="form-group">
@@ -4144,8 +4144,12 @@ const App = {
                     <input type="hidden" name="object_type_code" value="${objectTypeCodes[type] || ''}">
                     <div class="form-group">
                         <label>Номер *</label>
-                        <input type="text" id="modal-marker-number" value="СТ-<код>-<id>" disabled style="background: var(--bg-tertiary);">
-                        <p class="text-muted">Номер формируется автоматически по собственнику и ID</p>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="text" id="modal-number-prefix" readonly style="flex: 0 0 200px; background: var(--bg-tertiary);" value="...">
+                            <input type="number" name="number_seq" id="modal-number-seq" min="1" step="1" placeholder="Авто" style="flex: 0 0 140px;">
+                            <input type="text" name="number_suffix" id="modal-number-suffix" maxlength="5" placeholder="Суффикс (до 5)" style="flex: 1;">
+                        </div>
+                        <p class="text-muted">Номер формируется автоматически по собственнику и виду объекта. Если у собственника диапазон 0-0 — номер можно ввести вручную.</p>
                     </div>
                     <div id="coords-wgs84-inputs">
                         <div class="form-group">
@@ -4301,9 +4305,13 @@ const App = {
             formHtml = `
                 <form id="add-object-form">
                     <div class="form-group">
-                        <label>Номер</label>
-                        <input type="text" id="modal-cable-number" value="КАБ-<код>-<id>" disabled style="background: var(--bg-tertiary);">
-                        <p class="text-muted">Номер формируется автоматически по собственнику и ID</p>
+                        <label>Номер *</label>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="text" id="modal-number-prefix" readonly style="flex: 0 0 220px; background: var(--bg-tertiary);" value="...">
+                            <input type="number" name="number_seq" id="modal-number-seq" min="1" step="1" placeholder="Авто" style="flex: 0 0 140px;">
+                            <input type="text" name="number_suffix" id="modal-number-suffix" maxlength="5" placeholder="Суффикс (до 5)" style="flex: 1;">
+                        </div>
+                        <p class="text-muted">Номер формируется автоматически по собственнику и виду объекта кабеля. Если у собственника диапазон 0-0 — номер можно ввести вручную.</p>
                     </div>
                     <div class="form-group">
                         <label>Вид объекта *</label>
@@ -4469,7 +4477,7 @@ const App = {
             if (owners.success && document.getElementById('modal-owner-select')) {
                 document.getElementById('modal-owner-select').innerHTML = 
                     '<option value="">Выберите...</option>' +
-                    owners.data.map(o => `<option value="${o.id}" data-code="${o.code || ''}" data-is-default="${o.is_default ? 1 : 0}">${o.name}</option>`).join('');
+                    owners.data.map(o => `<option value="${o.id}" data-code="${o.code || ''}" data-range-from="${o.range_from ?? 0}" data-range-to="${o.range_to ?? 0}" data-is-default="${o.is_default ? 1 : 0}">${o.name}</option>`).join('');
                 const sel = document.getElementById('modal-owner-select');
                 const udef = this.settings?.default_owner_id || '';
                 if (!pickUserDefault(sel, udef)) pickDefault(sel);
@@ -4478,29 +4486,99 @@ const App = {
             // Обновление префикса номера по выбранному собственнику
             const ownerSelect = document.getElementById('modal-owner-select');
             const prefixInput = document.getElementById('modal-number-prefix');
-            const markerNumberInput = document.getElementById('modal-marker-number');
-            const cableNumberInput = document.getElementById('modal-cable-number');
-            if (ownerSelect && (prefixInput || markerNumberInput || cableNumberInput)) {
-                const updatePrefix = () => {
-                    const ownerCode = ownerSelect.selectedOptions?.[0]?.dataset?.code || '';
-                    if (!ownerCode) return;
-                    const currentId = document.querySelector('#edit-object-form input[name="id"]')?.value || '<id>';
-                    if (objectType === 'wells') {
-                        if (prefixInput) prefixInput.value = `ККС-${ownerCode}-`;
-                    } else if (objectType === 'markers') {
-                        if (markerNumberInput) markerNumberInput.value = `СТ-${ownerCode}-${currentId}`;
-                    } else if (objectType === 'unified_cables') {
-                        if (cableNumberInput) cableNumberInput.value = `КАБ-${ownerCode}-${currentId}`;
-                    }
-                };
-                ownerSelect.onchange = updatePrefix;
-                updatePrefix();
+            const seqInput = document.getElementById('modal-number-seq');
+            const suffixInput = document.getElementById('modal-number-suffix');
+
+            const getSelectedOwnerRange = () => {
+                const opt = ownerSelect?.selectedOptions?.[0];
+                const rf = parseInt(opt?.dataset?.rangeFrom || '0', 10);
+                const rt = parseInt(opt?.dataset?.rangeTo || '0', 10);
+                return { rf: Number.isFinite(rf) ? rf : 0, rt: Number.isFinite(rt) ? rt : 0 };
+            };
+
+            const buildPrefix = () => {
+                const ownerCode = ownerSelect?.selectedOptions?.[0]?.dataset?.code || '';
+                if (!ownerCode) return '';
+
+                // Код номера берём из выбранного вида объекта (object_types.number_code) или из вида кабеля
+                let numberCode = '';
+                if (objectType === 'unified_cables') {
+                    const otSel = document.getElementById('modal-cable-object-type');
+                    numberCode = otSel?.selectedOptions?.[0]?.dataset?.numberCode || '';
+                } else {
+                    numberCode = document.getElementById('modal-type-select')?.selectedOptions?.[0]?.dataset?.numberCode || '';
+                }
+                numberCode = (numberCode || '').toString().trim();
+                if (!numberCode) return '';
+
+                return `${numberCode}-${ownerCode}-`;
+            };
+
+            const updateNumberUi = () => {
+                if (!prefixInput || !ownerSelect) return;
+                const pref = buildPrefix();
+                prefixInput.value = pref || '...';
+
+                if (!seqInput) return;
+                const { rf, rt } = getSelectedOwnerRange();
+                const manual = (rf === 0 && rt === 0);
+                seqInput.disabled = !manual;
+                if (!manual) {
+                    seqInput.value = '';
+                    seqInput.style.background = 'var(--bg-tertiary)';
+                } else {
+                    seqInput.style.background = '';
+                }
+            };
+
+            const checkManualUnique = async () => {
+                if (!prefixInput || !seqInput) return;
+                const { rf, rt } = getSelectedOwnerRange();
+                const manual = (rf === 0 && rt === 0);
+                if (!manual) return;
+
+                const pref = buildPrefix();
+                const seq = parseInt(seqInput.value || '', 10);
+                const sfx = (suffixInput?.value || '').toString().trim();
+                if (!pref || !Number.isFinite(seq) || seq <= 0) return;
+
+                const full = `${pref}${seq}${sfx ? '-' + sfx.replace(/[^0-9A-Za-zА-Яа-яЁё_]/g, '').slice(0, 5) : ''}`;
+                try {
+                    let resp = null;
+                    if (objectType === 'wells') resp = await API.wells.existsNumber(full);
+                    else if (objectType === 'markers') resp = await API.markerPosts.existsNumber(full);
+                    else if (objectType === 'unified_cables') resp = await API.unifiedCables.existsNumber(full);
+                    const exists = !!(resp?.data?.exists);
+                    seqInput.style.background = exists ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)';
+                } catch (_) {
+                    // ignore
+                }
+            };
+
+            if (ownerSelect && prefixInput) {
+                ownerSelect.addEventListener('change', () => {
+                    updateNumberUi();
+                    checkManualUnique().catch(() => {});
+                });
+                seqInput?.addEventListener('input', () => checkManualUnique().catch(() => {}));
+                suffixInput?.addEventListener('input', () => checkManualUnique().catch(() => {}));
+                // unified cables: префикс зависит от выбранного object_type_id
+                document.getElementById('modal-cable-object-type')?.addEventListener('change', () => {
+                    updateNumberUi();
+                    checkManualUnique().catch(() => {});
+                });
+                document.getElementById('modal-type-select')?.addEventListener('change', () => {
+                    updateNumberUi();
+                    checkManualUnique().catch(() => {});
+                });
+
+                updateNumberUi();
             }
             
             if (types.success && document.getElementById('modal-type-select')) {
                 const typeSelect = document.getElementById('modal-type-select');
                 typeSelect.innerHTML = types.data.map(t => 
-                    `<option value="${t.id}" data-code="${t.code}" data-is-default="${t.is_default ? 1 : 0}">${t.name}</option>`
+                    `<option value="${t.id}" data-code="${t.code}" data-number-code="${t.number_code || t.code || ''}" data-is-default="${t.is_default ? 1 : 0}">${t.name}</option>`
                 ).join('');
                 
                 // Персональные дефолты по "Вид" (object_types)
@@ -4703,7 +4781,7 @@ const App = {
                     document.getElementById('modal-cable-object-type').innerHTML = 
                         '<option value="">Выберите вид...</option>' +
                         cableObjectTypesResponse.data.map(ot => 
-                            `<option value="${ot.id}" data-code="${ot.code}">${ot.name}</option>`
+                            `<option value="${ot.id}" data-code="${ot.code}" data-number-code="${ot.number_code || ot.code || ''}">${ot.name}</option>`
                         ).join('');
                 }
             }
@@ -4745,22 +4823,7 @@ const App = {
         
         // Удаляем служебное поле
         delete data.object_type_code;
-
-        // Санитизация пользовательской части номера (разрешаем буквы/цифры/дефис/подчёркивание)
-        const sanitizeSuffix = (value) => (value || '').toString().replace(/[^0-9A-Za-zА-Яа-яЁё_-]/g, '');
-
-        // Формирование номера по правилам
-        if (type === 'wells') {
-            const prefix = (data.number_prefix || '').toString();
-            const suffix = sanitizeSuffix(data.number_suffix);
-            if (!suffix) {
-                this.notify('Введите номер (часть после префикса)', 'error');
-                return;
-            }
-            data.number = `${prefix}${suffix}`;
-            delete data.number_prefix;
-            delete data.number_suffix;
-        }
+        // Номер формируется на сервере (по диапазонам собственника + коду номера).
 
         try {
             let response;
