@@ -1449,16 +1449,18 @@ const App = {
 
             if (type === 'wells') {
                 const rawNumber = (obj.number || '').toString();
-                const wellSuffixMatch = rawNumber.match(/^ККС-[^-]+-(.+)$/);
-                const numberSuffix = (wellSuffixMatch ? wellSuffixMatch[1] : rawNumber) || '';
+                const parts = rawNumber.split('-');
+                const seq = (parts[2] && /^[0-9]+$/.test(parts[2])) ? parts[2] : '';
+                const sfx = (parts[3] || '').toString();
                 formHtml = `
                     <form id="edit-object-form">
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер *</label>
-                            <div style="display: flex; gap: 8px;">
-                                <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 180px; background: var(--bg-tertiary);" value="ККС-">
-                                <input type="text" name="number_suffix" id="modal-number-suffix" required style="flex: 1;" value="${this.escapeHtml(numberSuffix)}">
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="text" id="modal-number-prefix" readonly style="flex: 0 0 200px; background: var(--bg-tertiary);" value="...">
+                                <input type="number" name="number_seq" id="modal-number-seq" min="1" step="1" value="${this.escapeHtml(seq)}" style="flex: 0 0 140px;">
+                                <input type="text" name="number_suffix" id="modal-number-suffix" maxlength="5" value="${this.escapeHtml(sfx)}" placeholder="Суффикс (до 5)" style="flex: 1;">
                             </div>
                             <div id="well-number-hint" class="text-muted" style="margin-top:6px;"></div>
                         </div>
@@ -1495,12 +1497,21 @@ const App = {
                     </form>
                 `;
             } else if (type === 'markers') {
+                const rawNumber = (obj.number || '').toString();
+                const parts = rawNumber.split('-');
+                const seq = (parts[2] && /^[0-9]+$/.test(parts[2])) ? parts[2] : '';
+                const sfx = (parts[3] || '').toString();
                 formHtml = `
                     <form id="edit-object-form">
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
-                            <label>Номер</label>
-                            <input type="text" id="modal-marker-number" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
+                            <label>Номер *</label>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="text" id="modal-number-prefix" readonly style="flex: 0 0 200px; background: var(--bg-tertiary);" value="...">
+                                <input type="number" name="number_seq" id="modal-number-seq" min="1" step="1" value="${this.escapeHtml(seq)}" style="flex: 0 0 140px;">
+                                <input type="text" name="number_suffix" id="modal-number-suffix" maxlength="5" value="${this.escapeHtml(sfx)}" placeholder="Суффикс (до 5)" style="flex: 1;">
+                            </div>
+                            <p class="text-muted">Если у собственника диапазон 0-0 — номер можно менять вручную.</p>
                         </div>
                         <div id="coords-wgs84-inputs">
                             <div class="form-group">
@@ -2232,9 +2243,10 @@ const App = {
     setupWellEditNumberValidation(wellId) {
         const ownerSelect = document.getElementById('modal-owner-select');
         const prefixInput = document.getElementById('modal-number-prefix');
+        const seqInput = document.getElementById('modal-number-seq');
         const suffixInput = document.getElementById('modal-number-suffix');
         const hint = document.getElementById('well-number-hint');
-        if (!suffixInput) return;
+        if (!suffixInput && !seqInput) return;
 
         const lightGreen = 'rgba(34, 197, 94, 0.15)';
         const lightRed = 'rgba(239, 68, 68, 0.15)';
@@ -2262,8 +2274,11 @@ const App = {
 
         const buildNumber = () => {
             const prefix = (prefixInput?.value || '').toString();
-            const suffix = (suffixInput?.value || '').toString();
-            return `${prefix}${suffix}`.trim();
+            const seq = (seqInput?.value || '').toString();
+            const suffix = (suffixInput?.value || '').toString().trim();
+            const cleanSuffix = suffix.replace(/[^0-9A-Za-zА-Яа-яЁё_]/g, '').slice(0, 5);
+            if (!prefix || !seq) return '';
+            return `${prefix}${seq}${cleanSuffix ? '-' + cleanSuffix : ''}`.trim();
         };
 
         const check = async () => {
@@ -2288,7 +2303,8 @@ const App = {
 
         // Доп. обработчик поверх существующего (который обновляет префикс)
         if (ownerSelect) ownerSelect.addEventListener('change', schedule);
-        suffixInput.addEventListener('input', schedule);
+        seqInput?.addEventListener('input', schedule);
+        suffixInput?.addEventListener('input', schedule);
 
         // стартовая проверка
         schedule();
@@ -2304,14 +2320,7 @@ const App = {
         const data = Object.fromEntries(formData.entries());
         delete data.id;
 
-        // Колодцы: собираем полный номер из префикса и суффикса
-        if (type === 'wells' && (data.number_prefix !== undefined || data.number_suffix !== undefined)) {
-            const prefix = (data.number_prefix || '').toString();
-            const suffix = (data.number_suffix || '').toString();
-            data.number = `${prefix}${suffix}`.trim();
-            delete data.number_prefix;
-            delete data.number_suffix;
-        }
+        // Номер пересобирается на сервере из number_seq/number_suffix при необходимости
         
         // Собираем выбранные группы
         const groupCheckboxes = form.querySelectorAll('input[name="group_ids"]:checked');
