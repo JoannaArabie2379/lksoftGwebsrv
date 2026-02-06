@@ -616,14 +616,22 @@ class UnifiedCableController extends BaseController
                 $this->db->update('cables', $data, 'id = :id', ['id' => $cableId]);
             }
 
-            // Если изменён собственник — обновляем номер: КАБ-<код собственника>-<id>
+            // Если изменён собственник — обновляем номер по новой схеме (сохраняем seq/суффикс, если возможно)
             if (array_key_exists('owner_id', $data) && (int) $data['owner_id'] !== (int) ($oldCable['owner_id'] ?? 0)) {
-                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
-                $ownerCode = $owner['code'] ?? null;
-                if ($ownerCode) {
-                    $number = "КАБ-{$ownerCode}-{$cableId}";
-                    $this->db->update('cables', ['number' => $number], 'id = :id', ['id' => $cableId]);
-                }
+                $parts = $this->parseNumberSeqAndSuffix((string) ($oldCable['number'] ?? ''));
+                $preferredSeq = $parts['seq'] ?? null;
+                $suffix = $parts['suffix'] ?? '';
+                $typeId = (int) ($oldCable['object_type_id'] ?? 0);
+
+                $newNumber = $this->buildAutoNumber(
+                    'cables',
+                    $typeId,
+                    (int) $data['owner_id'],
+                    $preferredSeq ? (int) $preferredSeq : null,
+                    $suffix ? (string) $suffix : null,
+                    $cableId
+                );
+                $this->db->update('cables', ['number' => $newNumber], 'id = :id', ['id' => $cableId]);
             }
 
             $this->db->commit();

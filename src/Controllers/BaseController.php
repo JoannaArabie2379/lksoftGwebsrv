@@ -308,6 +308,24 @@ abstract class BaseController
                 Response::error('Введите номер (целое положительное)', 422);
             }
         } else {
+            // авто режим: если передан preferred seq (например, при смене собственника) — пытаемся сохранить его
+            $preferred = (int) ($manualSeq ?? 0);
+            if ($preferred > 0 && $preferred >= $rf && $preferred <= $rt) {
+                $prefNum = "{$numberCode}-{$ownerCode}-{$preferred}";
+                if ($sfx !== '') $prefNum .= "-{$sfx}";
+                $sqlPref = "SELECT id FROM {$table} WHERE number = :n AND {$typeColumn} = :type_id";
+                $pPref = ['n' => $prefNum, 'type_id' => (int) $typeId];
+                if (!empty($excludeId)) {
+                    $sqlPref .= " AND id <> :id";
+                    $pPref['id'] = (int) $excludeId;
+                }
+                $sqlPref .= " LIMIT 1";
+                $existsPref = $this->db->fetch($sqlPref, $pPref);
+                if (!$existsPref) {
+                    return $prefNum;
+                }
+            }
+
             // авто режим: берём минимальный свободный в диапазоне
             $like = $numberCode . '-' . $ownerCode . '-%';
             $row = $this->db->fetch(
@@ -355,6 +373,25 @@ abstract class BaseController
         }
 
         return $num;
+    }
+
+    protected function parseNumberSeqAndSuffix(string $number): array
+    {
+        $n = trim((string) $number);
+        // Ожидаемый формат: <code>-<owner>-<seq>(-<suffix>)
+        $parts = explode('-', $n);
+        $seq = null;
+        $suffix = '';
+        if (count($parts) >= 3) {
+            $cand = $parts[2] ?? '';
+            if (preg_match('/^[0-9]+$/', (string) $cand)) {
+                $seq = (int) $cand;
+            }
+            if (count($parts) >= 4) {
+                $suffix = (string) ($parts[3] ?? '');
+            }
+        }
+        return ['seq' => $seq, 'suffix' => $suffix];
     }
 
     /**

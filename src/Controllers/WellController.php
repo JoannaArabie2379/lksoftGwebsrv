@@ -350,24 +350,44 @@ class WellController extends BaseController
         try {
             $this->db->beginTransaction();
 
-            // Номер колодца: ККС-<код собственника>-<суффикс>
+            // Номер колодца (новая схема):
+            // <Код номера (object_types.number_code)>-<Код собственника>-<число>(-суффикс)
             $ownerIdOld = (int) ($oldWell['owner_id'] ?? 0);
             $ownerIdNew = array_key_exists('owner_id', $data) ? (int) $data['owner_id'] : $ownerIdOld;
-            $numberIncoming = array_key_exists('number', $data) ? trim((string) $data['number']) : null;
-            $numberBase = ($numberIncoming !== null && $numberIncoming !== '') ? $numberIncoming : (string) ($oldWell['number'] ?? '');
-            $suffix = '';
-            if (preg_match('/^ККС-[^-]+-(.+)$/u', $numberBase, $m)) {
-                $suffix = trim((string) ($m[1] ?? ''));
-            } else {
-                $suffix = trim($numberBase);
-            }
+            $typeId = array_key_exists('type_id', $data) ? (int) $data['type_id'] : (int) ($oldWell['type_id'] ?? 0);
 
-            if (($ownerIdNew > 0 && $ownerIdNew !== $ownerIdOld) || $numberIncoming !== null) {
-                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => $ownerIdNew]);
-                $ownerCode = $owner['code'] ?? null;
-                if ($ownerCode) {
-                    $data['number'] = "ККС-{$ownerCode}-{$suffix}";
-                }
+            // Приоритет источников для seq/suffix: number_seq/number_suffix -> number (legacy UI) -> old number
+            $seqIncoming = $this->request->input('number_seq');
+            $suffixIncoming = $this->request->input('number_suffix');
+            $numberIncoming = array_key_exists('number', $data) ? trim((string) $data['number']) : null;
+
+            $partsOld = $this->parseNumberSeqAndSuffix((string) ($oldWell['number'] ?? ''));
+            $partsInc = ($numberIncoming !== null && $numberIncoming !== '')
+                ? $this->parseNumberSeqAndSuffix((string) $numberIncoming)
+                : ['seq' => null, 'suffix' => ''];
+
+            $preferredSeq =
+                ($seqIncoming !== null && $seqIncoming !== '') ? (int) $seqIncoming :
+                (($partsInc['seq'] ?? null) ? (int) $partsInc['seq'] : (($partsOld['seq'] ?? null) ? (int) $partsOld['seq'] : null));
+            $suffix =
+                ($suffixIncoming !== null && $suffixIncoming !== '') ? (string) $suffixIncoming :
+                ((string) (($partsInc['suffix'] ?? '') !== '' ? ($partsInc['suffix'] ?? '') : ($partsOld['suffix'] ?? '')));
+
+            $shouldRebuildNumber =
+                ($ownerIdNew > 0 && $ownerIdNew !== $ownerIdOld) ||
+                ($seqIncoming !== null) ||
+                ($suffixIncoming !== null) ||
+                ($numberIncoming !== null);
+
+            if ($shouldRebuildNumber) {
+                $data['number'] = $this->buildAutoNumber(
+                    'wells',
+                    $typeId,
+                    $ownerIdNew,
+                    $preferredSeq ? (int) $preferredSeq : null,
+                    $suffix !== '' ? (string) $suffix : null,
+                    $wellId
+                );
             }
 
             // Обновляем координаты если переданы

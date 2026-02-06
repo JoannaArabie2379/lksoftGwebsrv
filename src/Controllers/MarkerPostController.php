@@ -396,14 +396,22 @@ class MarkerPostController extends BaseController
                 $this->db->update('marker_posts', $data, 'id = :id', ['id' => $postId]);
             }
 
-            // Если изменён собственник — обновляем номер: СТ-<код собственника>-<id>
+            // Если изменён собственник — обновляем номер по новой схеме (сохраняем seq/суффикс, если возможно)
             if (array_key_exists('owner_id', $data) && (int) $data['owner_id'] !== (int) $oldPost['owner_id']) {
-                $owner = $this->db->fetch("SELECT code FROM owners WHERE id = :id", ['id' => (int) $data['owner_id']]);
-                $ownerCode = $owner['code'] ?? null;
-                if ($ownerCode) {
-                    $number = "СТ-{$ownerCode}-{$postId}";
-                    $this->db->update('marker_posts', ['number' => $number], 'id = :id', ['id' => $postId]);
-                }
+                $parts = $this->parseNumberSeqAndSuffix((string) ($oldPost['number'] ?? ''));
+                $preferredSeq = $parts['seq'] ?? null;
+                $suffix = $parts['suffix'] ?? '';
+                $typeId = (int) ($oldPost['type_id'] ?? ($data['type_id'] ?? 0));
+
+                $newNumber = $this->buildAutoNumber(
+                    'marker_posts',
+                    $typeId,
+                    (int) $data['owner_id'],
+                    $preferredSeq ? (int) $preferredSeq : null,
+                    $suffix ? (string) $suffix : null,
+                    $postId
+                );
+                $this->db->update('marker_posts', ['number' => $newNumber], 'id = :id', ['id' => $postId]);
             }
 
             $this->db->commit();
