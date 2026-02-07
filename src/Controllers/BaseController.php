@@ -297,14 +297,12 @@ abstract class BaseController
         $sfx = $this->sanitizeNumberSuffix($suffix);
 
         // 3-я часть: минимальное целое положительное (>=1), уникальное для уже существующих номеров
-        // в рамках конкретного вида объекта (typeColumn = typeId) и собственника (ownerCode включён в номер)
-        $like = $numberCode . '-' . $ownerCode . '-%';
+        // сквозное в рамках конкретного вида объекта (typeColumn = typeId), независимо от собственника.
         $row = $this->db->fetch(
             "WITH used AS (
                 SELECT DISTINCT (split_part(number, '-', 3))::int AS n
                 FROM {$table}
-                WHERE number LIKE :like
-                  AND {$typeColumn} = :type_id
+                WHERE {$typeColumn} = :type_id
                   AND split_part(number, '-', 3) ~ '^[0-9]+$'
             ),
             mx AS (
@@ -319,7 +317,7 @@ abstract class BaseController
             WHERE u.n IS NULL
             ORDER BY gs.n
             LIMIT 1",
-            ['like' => $like, 'type_id' => (int) $typeId]
+            ['type_id' => (int) $typeId]
         );
         $seq = (int) ($row['n'] ?? 0);
         if ($seq <= 0) {

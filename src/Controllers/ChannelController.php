@@ -608,6 +608,14 @@ class ChannelController extends BaseController
         ]);
         $wellData = array_filter($wellData, fn($v) => $v !== null);
 
+        // Убедиться, что все необязательные поля присутствуют (иначе PDO упадёт на отсутствующих параметрах)
+        $optionalWellFields = ['depth', 'material', 'installation_date', 'notes'];
+        foreach ($optionalWellFields as $field) {
+            if (!array_key_exists($field, $wellData)) {
+                $wellData[$field] = null;
+            }
+        }
+
         $errors = $this->request->validate([
             'owner_id' => 'required|integer',
             'type_id' => 'required|integer',

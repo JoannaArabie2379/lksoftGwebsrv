@@ -7,7 +7,8 @@
 --
 -- ВНИМАНИЕ:
 -- - Скрипт НЕ учитывает суффиксы (suffix) и присваивает номера без суффикса.
--- - seq назначается подряд от 1 по порядку id в рамках (owner_id, type_id/object_type_id).
+-- - seq назначается подряд от 1 по порядку id сквозным образом в рамках вида объекта (type_id/object_type_id),
+--   независимо от собственника (owner_id).
 -- - Перед запуском сделайте резервную копию базы.
 -- ============================================================
 
@@ -38,7 +39,7 @@ assigned AS (
         id,
         owner_code,
         num_code,
-        row_number() OVER (PARTITION BY owner_id, type_id ORDER BY id) AS seq
+        row_number() OVER (PARTITION BY type_id ORDER BY id) AS seq
     FROM base
 )
 UPDATE wells w
@@ -66,7 +67,7 @@ assigned AS (
         id,
         owner_code,
         num_code,
-        row_number() OVER (PARTITION BY owner_id, type_id ORDER BY id) AS seq
+        row_number() OVER (PARTITION BY type_id ORDER BY id) AS seq
     FROM base
 )
 UPDATE marker_posts mp
@@ -95,7 +96,7 @@ assigned AS (
         owner_code,
         num_code,
         object_type_id,
-        row_number() OVER (PARTITION BY owner_id, object_type_id ORDER BY id) AS seq
+        row_number() OVER (PARTITION BY object_type_id ORDER BY id) AS seq
     FROM base
 )
 UPDATE cables c
