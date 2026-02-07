@@ -399,9 +399,48 @@ const App = {
         document.getElementById('btn-clear-highlight')?.addEventListener('click', () => MapManager.clearHighlight());
 
         // Esc = отменить подсветку / отменить режимы добавления (аналогично кнопкам "Отменить ...")
+        // Delete/Backspace = удалить выбранный объект (как кнопка "Удалить" в панели) / удалить выбранные при мультивыборе
         if (!this._boundEscHighlight) {
             this._boundEscHighlight = true;
             document.addEventListener('keydown', (e) => {
+                // Игнорируем горячие клавиши, если курсор в поле ввода
+                const tag = (e.target && e.target.tagName) ? String(e.target.tagName).toUpperCase() : '';
+                const isEditable =
+                    tag === 'INPUT' ||
+                    tag === 'TEXTAREA' ||
+                    tag === 'SELECT' ||
+                    (e.target && e.target.isContentEditable);
+
+                if (e.key === 'Delete' || e.key === 'Backspace') {
+                    if (isEditable) return;
+                    // если открыта модалка — не удаляем с клавиатуры
+                    const modal = document.getElementById('modal');
+                    if (modal && !modal.classList.contains('hidden')) return;
+
+                    try {
+                        // мультивыбор: удаляем выбранные объекты
+                        const mm = (typeof MapManager !== 'undefined') ? MapManager : null;
+                        const hasMulti = !!(mm?.multiSelected && (mm.multiSelected.size || 0) > 0);
+                        if (hasMulti && this.canDelete()) {
+                            e.preventDefault();
+                            this.deleteMapMultiSelected();
+                            return;
+                        }
+                    } catch (_) {}
+
+                    // одиночный выбор: удаляем текущий объект (как кнопка "Удалить" в панели)
+                    try {
+                        const panel = document.getElementById('object-info-panel');
+                        const visible = panel && !panel.classList.contains('hidden');
+                        const hasObj = !!(panel?.dataset?.objectType && panel?.dataset?.objectId);
+                        if (visible && hasObj && this.canDelete()) {
+                            e.preventDefault();
+                            this.deleteCurrentObject();
+                        }
+                    } catch (_) {}
+                    return;
+                }
+
                 if (e.key !== 'Escape') return;
 
                 // 1) Отмена подсветки кабеля
@@ -3886,6 +3925,60 @@ const App = {
         try { MapManager.clearMultiSelection?.(); } catch (_) {}
         try { MapManager.loadAllLayers?.(); } catch (_) {}
         try { this.loadObjects?.(); } catch (_) {}
+    },
+
+    async deleteMapMultiSelected() {
+        const list = (typeof MapManager !== 'undefined' && typeof MapManager.getMultiSelectedList === 'function')
+            ? MapManager.getMultiSelectedList()
+            : [];
+        if (!list.length) {
+            this.notify('Нет выбранных объектов', 'warning');
+            return;
+        }
+        if (!this.canDelete()) {
+            this.notify('Недостаточно прав для удаления', 'error');
+            return;
+        }
+
+        const cnt = list.length;
+        if (!confirm(`Вы уверены, что хотите удалить выбранные объекты (${cnt})?`)) {
+            return;
+        }
+
+        const deleteFnByType = {
+            well: (id) => API.wells.delete(id),
+            channel_direction: (id) => API.channelDirections.delete(id),
+            marker_post: (id) => API.markerPosts.delete(id),
+            unified_cable: (id) => API.unifiedCables.delete(id),
+            ground_cable: (id) => API.cables.delete('ground', id),
+            aerial_cable: (id) => API.cables.delete('aerial', id),
+            duct_cable: (id) => API.cables.delete('duct', id),
+        };
+
+        const results = { ok: 0, failed: 0 };
+        for (const item of list) {
+            const type = item?.objectType;
+            const id = item?.properties?.id;
+            const fn = deleteFnByType[type];
+            if (!fn || !id) {
+                results.failed += 1;
+                continue;
+            }
+            try {
+                const resp = await fn(id);
+                if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+                results.ok += 1;
+            } catch (_) {
+                results.failed += 1;
+            }
+        }
+
+        try { MapManager.clearMultiSelection?.(); } catch (_) {}
+        try { MapManager.loadAllLayers?.(); } catch (_) {}
+        try { this.loadObjects?.(); } catch (_) {}
+
+        if (results.failed) this.notify(`Удалено: ${results.ok}, ошибок: ${results.failed}`, 'warning');
+        else this.notify(`Удалено: ${results.ok}`, 'success');
     },
 
     // ========================

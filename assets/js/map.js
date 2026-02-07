@@ -1512,6 +1512,7 @@ const MapManager = {
         }).join('');
 
         const canBulkEdit = (typeof App !== 'undefined' && typeof App.canWrite === 'function' && App.canWrite());
+        const canBulkDelete = (typeof App !== 'undefined' && typeof App.canDelete === 'function' && App.canDelete());
         infoContent.innerHTML = `
             <div class="text-muted" style="margin-bottom:8px;">Ctrl+клик — добавить/убрать объект из выделения.</div>
             ${rows}
@@ -1520,6 +1521,11 @@ const MapManager = {
                 ${canBulkEdit ? `
                     <button type="button" class="btn btn-sm btn-primary" onclick="App.showMapBulkEditModal()">
                         <i class="fas fa-pen"></i> Изменить выбранные
+                    </button>
+                ` : ``}
+                ${canBulkDelete ? `
+                    <button type="button" class="btn btn-sm btn-danger" onclick="App.deleteMapMultiSelected()">
+                        <i class="fas fa-trash"></i> Удалить выбранные
                     </button>
                 ` : ``}
                 <button type="button" class="btn btn-sm btn-danger" onclick="MapManager.clearMultiSelection()">
