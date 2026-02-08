@@ -9,6 +9,11 @@ const App = {
     currentReference: null,
     pagination: { page: 1, limit: 50, total: 0 },
     incidentDraftRelatedObjects: [],
+    objectsOrder: { by: 'number', dir: 'asc' },
+    isAdmin: false,
+    isReadOnly: false,
+    canWrite: false,
+    canDelete: false,
 
     /**
      * Инициализация приложения
@@ -56,10 +61,8 @@ const App = {
         // Отображаем имя пользователя
         document.getElementById('user-name').textContent = this.user.full_name || this.user.login;
 
-        // Скрываем админ-панель для не-админов
-        if (this.user.role.code !== 'admin') {
-            document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
-        }
+        // Применяем права доступа
+        this.applyRolePermissions();
 
         // Инициализируем карту
         MapManager.init();
@@ -79,6 +82,54 @@ const App = {
         } catch (error) {
             console.error('Ошибка загрузки данных карты:', error);
             this.notify('Ошибка загрузки данных карты', 'error');
+        }
+    },
+
+    /**
+     * Применение прав доступа в интерфейсе
+     */
+    applyRolePermissions() {
+        const roleCode = this.user?.role?.code || '';
+        const permissions = this.user?.permissions || {};
+
+        this.isAdmin = roleCode === 'admin';
+        this.isReadOnly = roleCode === 'readonly';
+        this.canWrite = this.isAdmin || permissions.write === true;
+        this.canDelete = this.isAdmin || permissions.delete === true;
+
+        // Админ-панель
+        if (!this.isAdmin) {
+            document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+        }
+
+        // Только чтение: доступна только карта
+        if (this.isReadOnly) {
+            document.querySelectorAll('.nav-item').forEach(item => {
+                const panel = item.dataset.panel;
+                const allow = panel === 'map';
+                item.classList.toggle('hidden', !allow);
+            });
+
+            // Отключаем кнопки редактирования/добавления
+            ['btn-add-object', 'btn-import', 'btn-export', 'btn-add-incident', 'btn-add-user', 'btn-add-ref'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.add('hidden');
+            });
+
+            if (this.currentPanel !== 'map') {
+                this.switchPanel('map');
+            }
+        }
+
+        // Ограничения для не-админа: справочники только на просмотр
+        if (!this.isAdmin) {
+            const addRef = document.getElementById('btn-add-ref');
+            if (addRef) addRef.classList.add('hidden');
+        }
+
+        // Обновляем доступ в панели инструментов карты
+        if (MapManager && typeof MapManager.setReadOnly === 'function') {
+            MapManager.setReadOnly(this.isReadOnly);
         }
     },
 
@@ -126,6 +177,17 @@ const App = {
 
         // Поиск объектов
         document.getElementById('search-objects').addEventListener('input', (e) => this.handleSearch(e.target.value));
+        document.getElementById('objects-order-select')?.addEventListener('change', (e) => {
+            this.updateObjectsOrder(e.target.value);
+        });
+        document.getElementById('objects-limit-select')?.addEventListener('change', (e) => {
+            const value = parseInt(e.target.value, 10);
+            if (Number.isFinite(value)) {
+                this.pagination.limit = value;
+                this.pagination.page = 1;
+                this.loadObjects();
+            }
+        });
 
         // Фильтры для кабелей в списке объектов
         document.getElementById('cables-filter-object-type')?.addEventListener('change', () => {
@@ -179,6 +241,7 @@ const App = {
         // Панель инструментов карты
         document.getElementById('btn-add-direction-map')?.addEventListener('click', () => MapManager.startAddDirectionMode());
         document.getElementById('btn-add-well-map')?.addEventListener('click', () => MapManager.startAddingObject('wells'));
+        document.getElementById('btn-add-marker-map')?.addEventListener('click', () => MapManager.startAddingObject('markers'));
         document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
         document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
         document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => MapManager.startAddDuctCableMode());
@@ -193,6 +256,14 @@ const App = {
             MapManager.cancelAddDuctCableMode();
         });
         document.getElementById('btn-finish-add-mode')?.addEventListener('click', () => MapManager.finishAddCableMode());
+
+        // Выход из функций карты по Esc
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (MapManager.cancelActiveModes && MapManager.cancelActiveModes({ reason: 'esc' })) {
+                this.notify('Режим карты завершён', 'info');
+            }
+        });
     },
 
     copyCurrentObjectCoordinates() {
@@ -339,6 +410,7 @@ const App = {
         // Загружаем данные для панели
         switch (panel) {
             case 'objects':
+                this.updateObjectsToolbar();
                 this.loadObjects();
                 break;
             case 'incidents':
@@ -494,7 +566,41 @@ const App = {
             }
         }
 
+        this.updateObjectsToolbar();
         this.loadObjects();
+    },
+
+    updateObjectsOrder(value) {
+        const map = {
+            number_asc: { by: 'number', dir: 'asc' },
+            number_desc: { by: 'number', dir: 'desc' },
+            created_desc: { by: 'created_at', dir: 'desc' },
+            created_asc: { by: 'created_at', dir: 'asc' },
+        };
+        this.objectsOrder = map[value] || { by: 'number', dir: 'asc' };
+        this.pagination.page = 1;
+        this.loadObjects();
+    },
+
+    updateObjectsToolbar() {
+        const row = document.getElementById('objects-filters-row');
+        if (!row) return;
+
+        const shouldShow = !['unified_cables', 'groups'].includes(this.currentTab);
+        row.classList.toggle('hidden', !shouldShow);
+
+        const orderSelect = document.getElementById('objects-order-select');
+        if (orderSelect && this.objectsOrder) {
+            const value = `${this.objectsOrder.by}_${this.objectsOrder.dir}`;
+            if (orderSelect.value !== value) {
+                orderSelect.value = value;
+            }
+        }
+
+        const limitSelect = document.getElementById('objects-limit-select');
+        if (limitSelect && String(this.pagination.limit) !== limitSelect.value) {
+            limitSelect.value = String(this.pagination.limit);
+        }
     },
 
     async loadCableListFilters() {
@@ -538,6 +644,11 @@ const App = {
             page: this.pagination.page,
             limit: this.pagination.limit,
         };
+
+        if (this.objectsOrder?.by) {
+            params.order_by = this.objectsOrder.by;
+            params.order_dir = this.objectsOrder.dir;
+        }
         
         // Добавляем search только если он не пустой
         if (search) {
@@ -619,6 +730,11 @@ const App = {
                         // ignore
                     }
                 }
+
+                // Итоги по другим объектам
+                if (this.currentTab !== 'unified_cables') {
+                    this.updateObjectsStats(params, response.pagination);
+                }
             } else {
                 console.error('API returned error:', response);
                 this.notify('Ошибка загрузки данных', 'error');
@@ -671,12 +787,63 @@ const App = {
                     <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
                         <i class="fas fa-eye"></i>
                     </button>
+                    ${this.canWrite ? `
                     <button class="btn btn-sm btn-primary" onclick="App.editObject(${row.id})" title="Редактировать">
                         <i class="fas fa-edit"></i>
                     </button>
+                    ` : ''}
                 </td>
             </tr>
         `).join('');
+    },
+
+    async updateObjectsStats(params = {}, pagination = null) {
+        const row = document.getElementById('objects-filters-row');
+        if (!row || row.classList.contains('hidden')) return;
+
+        const countLabel = document.getElementById('objects-count-label');
+        const countEl = document.getElementById('objects-count');
+        const lengthLabel = document.getElementById('objects-length-label');
+        const lengthEl = document.getElementById('objects-length-sum');
+
+        const labels = {
+            wells: 'Кол-во колодцев',
+            directions: 'Кол-во направлений',
+            channels: 'Кол-во каналов',
+            markers: 'Кол-во столбиков',
+        };
+
+        if (countLabel) countLabel.textContent = labels[this.currentTab] || 'Кол-во объектов';
+        if (lengthLabel) lengthLabel.classList.add('hidden');
+        if (lengthEl) lengthEl.classList.add('hidden');
+
+        if (countEl && pagination && Number.isFinite(pagination.total)) {
+            countEl.textContent = String(pagination.total);
+        }
+
+        if (this.currentTab === 'directions') {
+            const statsParams = { ...params };
+            delete statsParams.page;
+            delete statsParams.limit;
+            try {
+                const statsResp = await API.channelDirections.stats(statsParams);
+                if (statsResp?.success) {
+                    const count = statsResp.data?.count ?? 0;
+                    const sum = statsResp.data?.length_sum ?? 0;
+                    if (countEl) countEl.textContent = String(count);
+                    if (lengthLabel) {
+                        lengthLabel.textContent = 'Общая протяженность направлений';
+                        lengthLabel.classList.remove('hidden');
+                    }
+                    if (lengthEl) {
+                        lengthEl.textContent = Number(sum).toFixed(2);
+                        lengthEl.classList.remove('hidden');
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
     },
 
     /**
@@ -814,7 +981,11 @@ const App = {
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер *</label>
-                            <input type="text" name="number" value="${obj.number || ''}" required>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 180px; background: var(--bg-tertiary);" value="">
+                                <input type="text" name="number_suffix" id="modal-number-suffix" required placeholder="Например: ТУ-01" style="flex: 1;" data-full-number="${obj.number || ''}">
+                            </div>
+                            <p class="text-muted">Префикс формируется автоматически по собственнику</p>
                         </div>
                         <div class="form-group">
                             <label>Система координат</label>
@@ -871,7 +1042,11 @@ const App = {
                         <input type="hidden" name="id" value="${obj.id}">
                         <div class="form-group">
                             <label>Номер</label>
-                            <input type="text" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 200px; background: var(--bg-tertiary);" value="">
+                                <input type="text" name="number_suffix" id="modal-number-suffix" placeholder="Доп. суффикс" style="flex: 1;" data-full-number="${obj.number || ''}">
+                            </div>
+                            <p class="text-muted">Суффикс добавляется после базового номера</p>
                         </div>
                         <div class="form-group">
                             <label>Система координат</label>
@@ -1003,7 +1178,11 @@ const App = {
                         <input type="hidden" name="object_type_code" value="${obj.object_type_code || ''}">
                         <div class="form-group">
                             <label>Номер</label>
-                            <input type="text" value="${obj.number || ''}" disabled style="background: var(--bg-tertiary);">
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" name="number_prefix" id="modal-number-prefix" readonly style="flex: 0 0 200px; background: var(--bg-tertiary);" value="">
+                                <input type="text" name="number_suffix" id="modal-number-suffix" placeholder="Доп. суффикс" style="flex: 1;" data-full-number="${obj.number || ''}">
+                            </div>
+                            <p class="text-muted">Суффикс добавляется после базового номера</p>
                         </div>
                         <div class="form-group">
                             <label>Длина расч. (м)</label>
@@ -1277,6 +1456,10 @@ const App = {
                     select.value = select.dataset.value;
                 }
             });
+            const ownerSelect = document.getElementById('modal-owner-select');
+            if (ownerSelect) {
+                ownerSelect.dispatchEvent(new Event('change'));
+            }
 
             // Для кабелей — после установки типа загружаем каталог и применяем сохранённое значение
             if (type === 'unified_cables' && document.getElementById('modal-cable-type-select')?.value) {
@@ -1339,6 +1522,27 @@ const App = {
         const formData = new FormData(form);
         const data = Object.fromEntries(formData.entries());
         delete data.id;
+
+        // Санитизация пользовательской части номера (разрешаем буквы/цифры/дефис/подчёркивание)
+        const sanitizeSuffix = (value) => (value || '').toString().replace(/[^0-9A-Za-zА-Яа-яЁё_-]/g, '');
+
+        // Формирование номера по префиксу/суффиксу
+        if (data.number_prefix !== undefined || data.number_suffix !== undefined) {
+            const prefix = (data.number_prefix || '').toString();
+            const suffix = sanitizeSuffix(data.number_suffix);
+
+            if (type === 'wells') {
+                if (!suffix) {
+                    this.notify('Введите номер (часть после префикса)', 'error');
+                    return;
+                }
+                data.number = `${prefix}${suffix}`;
+            } else {
+                data.number = suffix ? `${prefix}${suffix}` : (prefix.endsWith('-') ? prefix.slice(0, -1) : prefix);
+            }
+            delete data.number_prefix;
+            delete data.number_suffix;
+        }
         
         // Собираем выбранные группы
         const groupCheckboxes = form.querySelectorAll('input[name="group_ids"]:checked');
@@ -1402,6 +1606,10 @@ const App = {
                 
                 this.hideModal();
                 this.notify('Объект обновлён', 'success');
+                if (type === 'unified_cables') {
+                    MapManager.clearHighlight();
+                    MapManager.hideObjectInfo();
+                }
                 this.loadObjects();
                 MapManager.loadAllLayers();
             } else {
@@ -2099,16 +2307,19 @@ const App = {
         document.getElementById('ref-table-header').innerHTML = 
             columns.slice(0, 5).map(col => `<th>${col}</th>`).join('') + '<th>Действия</th>';
         
+        const canEdit = this.isAdmin;
         document.getElementById('ref-table-body').innerHTML = data.map(row => `
             <tr>
                 ${columns.slice(0, 5).map(col => `<td>${row[col] || '-'}</td>`).join('')}
                 <td>
+                    ${canEdit ? `
                     <button class="btn btn-sm btn-primary" onclick="App.editReference(${row.id})">
                         <i class="fas fa-edit"></i>
                     </button>
                     <button class="btn btn-sm btn-danger" onclick="App.deleteReference(${row.id})">
                         <i class="fas fa-trash"></i>
                     </button>
+                    ` : '<span class="text-muted">Только просмотр</span>'}
                 </td>
             </tr>
         `).join('');
@@ -2153,28 +2364,33 @@ const App = {
     /**
      * Модальное окно
      */
-    showModal(title, content, footer = '') {
+    showModal(title, content, footer = '', options = {}) {
+        const modal = document.getElementById('modal');
+        modal.classList.toggle('map-floating', !!options.mapFloating || /(кратчайшему|кротчайшему)\s+пути/i.test(title));
+
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-body').innerHTML = content;
         document.getElementById('modal-footer').innerHTML = footer;
-        document.getElementById('modal').classList.remove('hidden');
+        modal.classList.remove('hidden');
 
         // Дата/время по умолчанию для пустых полей
-        const modal = document.getElementById('modal');
+        const nowModal = modal;
         const now = new Date();
         const pad2 = (n) => String(n).padStart(2, '0');
         const today = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
         const nowLocal = `${today}T${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
-        modal.querySelectorAll('input[type="date"]').forEach((el) => {
+        nowModal.querySelectorAll('input[type="date"]').forEach((el) => {
             if (!el.value) el.value = today;
         });
-        modal.querySelectorAll('input[type="datetime-local"]').forEach((el) => {
+        nowModal.querySelectorAll('input[type="datetime-local"]').forEach((el) => {
             if (!el.value) el.value = nowLocal;
         });
     },
 
     hideModal() {
-        document.getElementById('modal').classList.add('hidden');
+        const modal = document.getElementById('modal');
+        modal.classList.add('hidden');
+        modal.classList.remove('map-floating');
     },
 
     /**
@@ -2592,18 +2808,37 @@ const App = {
             // Обновление префикса номера по выбранному собственнику
             const ownerSelect = document.getElementById('modal-owner-select');
             const prefixInput = document.getElementById('modal-number-prefix');
+            const suffixInput = document.getElementById('modal-number-suffix');
             const markerNumberInput = document.getElementById('modal-marker-number');
             const cableNumberInput = document.getElementById('modal-cable-number');
             if (ownerSelect && (prefixInput || markerNumberInput || cableNumberInput)) {
                 const updatePrefix = () => {
                     const ownerCode = ownerSelect.selectedOptions?.[0]?.dataset?.code || '';
                     if (!ownerCode) return;
+                    const objectId = document.querySelector('#edit-object-form input[name="id"]')?.value || '';
                     if (objectType === 'wells') {
                         if (prefixInput) prefixInput.value = `ККС-${ownerCode}-`;
                     } else if (objectType === 'markers') {
-                        if (markerNumberInput) markerNumberInput.value = `СТ-${ownerCode}-<id>`;
+                        if (prefixInput) {
+                            const base = objectId ? `СТ-${ownerCode}-${objectId}` : `СТ-${ownerCode}-<id>`;
+                            prefixInput.value = `${base}-`;
+                        } else if (markerNumberInput) {
+                            markerNumberInput.value = `СТ-${ownerCode}-<id>`;
+                        }
                     } else if (objectType === 'unified_cables') {
-                        if (cableNumberInput) cableNumberInput.value = `КАБ-${ownerCode}-<id>`;
+                        if (prefixInput) {
+                            const base = objectId ? `КАБ-${ownerCode}-${objectId}` : `КАБ-${ownerCode}-<id>`;
+                            prefixInput.value = `${base}-`;
+                        } else if (cableNumberInput) {
+                            cableNumberInput.value = `КАБ-${ownerCode}-<id>`;
+                        }
+                    }
+
+                    if (suffixInput) {
+                        const shouldSync = !ownerSelect.dataset.value || ownerSelect.value === ownerSelect.dataset.value;
+                        if (shouldSync) {
+                            this.syncNumberSuffixFromFullNumber();
+                        }
                     }
                 };
                 ownerSelect.onchange = updatePrefix;
@@ -2758,6 +2993,33 @@ const App = {
         
         kindSelect.innerHTML = '<option value="">Выберите...</option>' +
             filteredKinds.map(k => `<option value="${k.id}">${k.name}</option>`).join('');
+    },
+
+    syncNumberSuffixFromFullNumber() {
+        const prefixInput = document.getElementById('modal-number-prefix');
+        const suffixInput = document.getElementById('modal-number-suffix');
+        if (!prefixInput || !suffixInput) return;
+
+        const full = suffixInput.dataset.fullNumber;
+        if (!full) return;
+
+        const prefix = prefixInput.value || '';
+        let suffix = '';
+
+        if (prefix && full.startsWith(prefix)) {
+            suffix = full.slice(prefix.length);
+        } else {
+            const prefixNoDash = prefix.endsWith('-') ? prefix.slice(0, -1) : prefix;
+            if (prefixNoDash && full.startsWith(prefixNoDash)) {
+                suffix = full.slice(prefixNoDash.length);
+            } else {
+                suffix = full;
+            }
+        }
+
+        if (suffix.startsWith('-')) suffix = suffix.slice(1);
+        suffixInput.value = suffix;
+        delete suffixInput.dataset.fullNumber;
     },
 
     /**
@@ -2976,6 +3238,29 @@ const App = {
             this.showCablesTableModal('Кабели в колодце', cables);
         } catch (e) {
             this.notify('Ошибка загрузки кабелей', 'error');
+        }
+    },
+
+    async dismantleWell(wellId) {
+        if (!this.canWrite) {
+            this.notify('Недостаточно прав', 'warning');
+            return;
+        }
+        if (!confirm('Выполнить демонтаж колодца? Будут удалены связанные направления и создано новое направление.')) {
+            return;
+        }
+        try {
+            const resp = await API.wells.dismantle(wellId);
+            if (resp?.success) {
+                this.notify('Колодец демонтирован', 'success');
+                MapManager.hideObjectInfo();
+                this.loadObjects();
+                MapManager.loadAllLayers();
+            } else {
+                this.notify(resp?.message || 'Ошибка демонтажа', 'error');
+            }
+        } catch (e) {
+            this.notify(e.message || 'Ошибка демонтажа', 'error');
         }
     },
 

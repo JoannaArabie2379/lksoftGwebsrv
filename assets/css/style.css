@@ -742,6 +742,24 @@ tr:hover {
     color: var(--text-primary);
 }
 
+#objects-filters-row .objects-order-select,
+#objects-filters-row .objects-limit-select {
+    min-width: 180px;
+}
+
+#objects-filters-row .objects-totals {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    color: var(--text-secondary);
+}
+
+#objects-filters-row .objects-totals strong {
+    color: var(--accent-color);
+}
+
 /* Incidents List */
 .incidents-list {
     flex: 1;
@@ -926,6 +944,19 @@ tr:hover {
     border-top: 1px solid var(--border-color);
 }
 
+.modal.map-floating {
+    background: transparent;
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 12px;
+    pointer-events: none;
+}
+
+.modal.map-floating .modal-content {
+    max-width: 420px;
+    pointer-events: auto;
+}
+
 /* Notifications */
 #notifications {
     position: fixed;
@@ -1082,6 +1113,15 @@ tr:hover {
 .map-toolbar .btn.active {
     background: var(--accent-color);
     color: white;
+}
+
+.map-toolbar .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.cable-highlight-path {
+    pointer-events: none;
 }
 
 /* Add Mode Status */

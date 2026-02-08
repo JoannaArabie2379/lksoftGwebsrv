@@ -245,6 +245,10 @@ const API = {
             return API.put(`/wells/${id}`, data);
         },
 
+        dismantle(id) {
+            return API.post(`/wells/${id}/dismantle`);
+        },
+
         delete(id) {
             return API.delete(`/wells/${id}`);
         },
@@ -257,6 +261,10 @@ const API = {
     channelDirections: {
         list(params = {}) {
             return API.get('/channel-directions', params);
+        },
+
+        stats(params = {}) {
+            return API.get('/channel-directions/stats', params);
         },
 
         geojson(params = {}) {

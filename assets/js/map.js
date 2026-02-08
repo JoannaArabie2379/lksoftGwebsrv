@@ -27,6 +27,13 @@ const MapManager = {
     lastClickHits: [],
     hoverHits: [],
     incidentSelectMode: false,
+    readOnly: false,
+    selectionActive: false,
+    selectionRect: null,
+    selectionStartLatLng: null,
+    selectionStartPoint: null,
+    lastSelectionHits: [],
+    ignoreNextClick: false,
 
     // Подписи колодцев
     wellLabelsEnabled: true,
@@ -84,6 +91,14 @@ const MapManager = {
             zoomControl: true,
         });
 
+        // Отдельный слой подсветки маршрутов под направлениями
+        this.map.createPane('cableHighlightPane');
+        const highlightPane = this.map.getPane('cableHighlightPane');
+        if (highlightPane) {
+            highlightPane.style.zIndex = 350;
+            highlightPane.style.pointerEvents = 'none';
+        }
+
         // Базовый слой OpenStreetMap (светлая тема по умолчанию)
         this.baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -112,11 +127,97 @@ const MapManager = {
         // Клик по карте
         this.map.on('click', (e) => this.onMapClick(e));
 
+        // Выделение объектов прямоугольником (Ctrl + drag)
+        this.map.on('mousedown', (e) => this.onSelectionStart(e));
+        this.map.on('mousemove', (e) => this.onSelectionMove(e));
+        this.map.on('mouseup', (e) => this.onSelectionEnd(e));
+
         // Авто-скрытие подписей колодцев по зуму
         this.map.on('zoomend', () => this.updateWellLabelsVisibility());
         this.updateWellLabelsVisibility();
 
         console.log('Карта инициализирована');
+    },
+
+    setReadOnly(isReadOnly) {
+        this.readOnly = !!isReadOnly;
+        const ids = [
+            'btn-add-direction-map',
+            'btn-add-well-map',
+            'btn-add-marker-map',
+            'btn-add-ground-cable-map',
+            'btn-add-aerial-cable-map',
+            'btn-add-duct-cable-map',
+            'btn-cancel-add-mode',
+            'btn-finish-add-mode',
+        ];
+        ids.forEach((id) => {
+            const btn = document.getElementById(id);
+            if (btn) btn.disabled = this.readOnly;
+        });
+
+        if (this.readOnly) {
+            this.cancelActiveModes({ silent: true });
+        }
+    },
+
+    getToolButtonIds() {
+        return [
+            'btn-add-direction-map',
+            'btn-add-well-map',
+            'btn-add-marker-map',
+            'btn-add-ground-cable-map',
+            'btn-add-aerial-cable-map',
+            'btn-add-duct-cable-map',
+        ];
+    },
+
+    clearToolButtonActive() {
+        this.getToolButtonIds().forEach((id) => {
+            document.getElementById(id)?.classList.remove('active');
+        });
+    },
+
+    setActiveToolButton(id) {
+        this.clearToolButtonActive();
+        if (id) {
+            document.getElementById(id)?.classList.add('active');
+        }
+    },
+
+    cancelActiveModes({ reason = '', silent = false } = {}) {
+        let cancelled = false;
+        if (this.addDirectionMode) {
+            this.cancelAddDirectionMode();
+            cancelled = true;
+        }
+        if (this.addCableMode) {
+            this.cancelAddCableMode();
+            cancelled = true;
+        }
+        if (this.addDuctCableMode) {
+            this.cancelAddDuctCableMode();
+            cancelled = true;
+        }
+        if (this.addingObject) {
+            this.cancelAddingObject();
+            cancelled = true;
+        }
+        if (this.incidentSelectMode) {
+            this.incidentSelectMode = false;
+            if (this.map) this.map.getContainer().style.cursor = '';
+            cancelled = true;
+        }
+
+        if (cancelled && !silent) {
+            this.clearToolButtonActive();
+            if (!this.addDirectionMode && !this.addCableMode && !this.addDuctCableMode && !this.addingObject) {
+                document.getElementById('add-mode-status')?.classList.add('hidden');
+                document.getElementById('btn-finish-add-mode')?.classList.add('hidden');
+            }
+        }
+
+        return cancelled;
     },
 
     startIncidentSelectMode() {
@@ -596,10 +697,142 @@ const MapManager = {
         return Array.from(uniq.values());
     },
 
+    getObjectsInBounds(bounds) {
+        if (!this.map || !bounds) return [];
+        const hits = [];
+
+        const testLayer = (layer) => {
+            const meta = layer?._igsMeta;
+            if (!meta || !meta.properties) return;
+            const props = meta.properties;
+
+            if (typeof layer.getLatLng === 'function') {
+                const ll = layer.getLatLng();
+                if (bounds.contains(ll)) {
+                    hits.push({
+                        objectType: meta.objectType,
+                        properties: props,
+                        title: `${this.getTypeDisplayName(meta.objectType)}: ${props.number || props.id}`
+                    });
+                }
+                return;
+            }
+
+            if (typeof layer.getLatLngs === 'function') {
+                const latlngs = layer.getLatLngs().flat(Infinity).filter(ll => ll && ll.lat !== undefined);
+                if (latlngs.length < 2) return;
+                const inside = latlngs.every(ll => bounds.contains(ll));
+                if (inside) {
+                    hits.push({
+                        objectType: meta.objectType,
+                        properties: props,
+                        title: `${this.getTypeDisplayName(meta.objectType)}: ${props.number || props.id}`
+                    });
+                }
+            }
+        };
+
+        const traverse = (layer) => {
+            if (!layer) return;
+            if (typeof layer.getLayers === 'function') {
+                layer.getLayers().forEach(traverse);
+                return;
+            }
+            testLayer(layer);
+        };
+        Object.values(this.layers || {}).forEach(group => traverse(group));
+
+        const uniq = new Map();
+        hits.forEach(h => {
+            const key = `${h.objectType}:${h.properties?.id}`;
+            if (!uniq.has(key)) uniq.set(key, h);
+        });
+        return Array.from(uniq.values());
+    },
+
+    onSelectionStart(e) {
+        const oe = e?.originalEvent;
+        if (!oe || !oe.ctrlKey || oe.button !== 0) return;
+        if (this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode || this.incidentSelectMode) return;
+
+        this.selectionActive = true;
+        this.selectionStartLatLng = e.latlng;
+        this.selectionStartPoint = this.map.latLngToContainerPoint(e.latlng);
+        if (this.map.dragging) this.map.dragging.disable();
+        this.map.getContainer().style.cursor = 'crosshair';
+
+        if (this.selectionRect) {
+            this.map.removeLayer(this.selectionRect);
+        }
+        this.selectionRect = L.rectangle(L.latLngBounds(e.latlng, e.latlng), {
+            color: '#3b82f6',
+            weight: 1,
+            dashArray: '4,4',
+            fillOpacity: 0.05,
+            interactive: false,
+        }).addTo(this.map);
+    },
+
+    onSelectionMove(e) {
+        if (!this.selectionActive || !this.selectionRect || !this.selectionStartLatLng) return;
+        const bounds = L.latLngBounds(this.selectionStartLatLng, e.latlng);
+        this.selectionRect.setBounds(bounds);
+    },
+
+    onSelectionEnd(e) {
+        if (!this.selectionActive) return;
+        this.selectionActive = false;
+        if (this.map.dragging) this.map.dragging.enable();
+        this.map.getContainer().style.cursor = '';
+
+        const endPoint = this.map.latLngToContainerPoint(e.latlng);
+        const dx = Math.abs((endPoint?.x || 0) - (this.selectionStartPoint?.x || 0));
+        const dy = Math.abs((endPoint?.y || 0) - (this.selectionStartPoint?.y || 0));
+
+        const bounds = this.selectionRect?.getBounds();
+        if (this.selectionRect) {
+            this.map.removeLayer(this.selectionRect);
+            this.selectionRect = null;
+        }
+        this.selectionStartLatLng = null;
+        this.selectionStartPoint = null;
+
+        if (!bounds || dx < 6 || dy < 6) {
+            return;
+        }
+
+        this.ignoreNextClick = true;
+        const hits = this.getObjectsInBounds(bounds);
+        if (!hits.length) {
+            App.notify('В выделенной области нет объектов', 'info');
+            return;
+        }
+
+        this.lastClickHits = hits;
+        if (hits.length === 1) {
+            const h = hits[0];
+            if (h) this.showObjectInfo(h.objectType, h.properties);
+            return;
+        }
+
+        const content = `
+            <div style="max-height: 60vh; overflow:auto;">
+                ${(hits || []).map((h, idx) => `
+                    <button class="btn btn-secondary btn-block" style="margin-bottom:8px;" onclick="MapManager.selectObjectFromHits(${idx})">
+                        ${h.title}
+                    </button>
+                `).join('')}
+            </div>
+            <p class="text-muted" style="margin-top:8px;">Выбрано объектов: ${hits.length}.</p>
+        `;
+        const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
+        App.showModal('Выберите объект', content, footer);
+    },
+
     updateHoverSnap(latlng) {
         if (!this.map) return;
         // Не мешаем режимам добавления
-        if (this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode) return;
+        if (this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode || this.selectionActive) return;
 
         const hits = this.getObjectsAtLatLng(latlng);
         const container = this.map.getContainer();
@@ -685,6 +918,11 @@ const MapManager = {
                 <button type="button" class="btn btn-sm btn-secondary" onclick="App.showCablesInWell(${properties.id})">
                     Показать кабели в колодце
                 </button>
+                ${App?.canWrite ? `
+                <button type="button" class="btn btn-sm btn-danger" onclick="App.dismantleWell(${properties.id})">
+                    Демонтаж колодца
+                </button>
+                ` : ''}
             </div>`;
         }
         if (objectType === 'channel_direction') {
@@ -712,6 +950,15 @@ const MapManager = {
             const canCopy = objectType === 'well' && properties?._lat !== undefined && properties?._lng !== undefined;
             copyBtn.classList.toggle('hidden', !canCopy);
         }
+
+        const editBtn = document.getElementById('btn-edit-object');
+        if (editBtn) {
+            editBtn.classList.toggle('hidden', !App?.canWrite);
+        }
+        const deleteBtn = document.getElementById('btn-delete-object');
+        if (deleteBtn) {
+            deleteBtn.classList.toggle('hidden', !App?.canDelete);
+        }
         
         infoPanel.classList.remove('hidden');
     },
@@ -730,6 +977,8 @@ const MapManager = {
             const resp = await API.unifiedCables.routeDirectionsGeojson(cableId);
             if (resp && resp.type === 'FeatureCollection') {
                 this.highlightLayer = L.geoJSON(resp, {
+                    pane: 'cableHighlightPane',
+                    interactive: false,
                     style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' })
                 }).addTo(this.map);
                 this.setHighlightBarVisible(true);
@@ -768,6 +1017,10 @@ const MapManager = {
      * Клик по карте (для добавления объектов)
      */
     onMapClick(e) {
+        if (this.ignoreNextClick) {
+            this.ignoreNextClick = false;
+            return;
+        }
         // Если включён режим добавления кабеля (ломаная линия)
         if (this.addCableMode) {
             this.handleAddCableClick(e.latlng);
@@ -783,6 +1036,11 @@ const MapManager = {
      * Старт режима добавления кабеля (ломаная линия)
      */
     startAddCableMode(typeCode) {
+        if (this.readOnly) {
+            App.notify('Доступно только чтение', 'warning');
+            return;
+        }
+        this.cancelActiveModes({ silent: true });
         this.addCableMode = true;
         this.addCableTypeCode = typeCode;
         this.selectedCablePoints = [];
@@ -794,6 +1052,9 @@ const MapManager = {
         statusEl.classList.remove('hidden');
         if (finishBtn) finishBtn.classList.remove('hidden');
         textEl.textContent = 'Кликните точки ломаной (минимум 2), затем нажмите «Создать»';
+
+        const toolId = typeCode === 'cable_ground' ? 'btn-add-ground-cable-map' : 'btn-add-aerial-cable-map';
+        this.setActiveToolButton(toolId);
 
         App.notify('Режим добавления кабеля: укажите точки ломаной', 'info');
     },
@@ -807,6 +1068,8 @@ const MapManager = {
         this.addCableTypeCode = null;
         this.selectedCablePoints = [];
         this.map.getContainer().style.cursor = '';
+
+        this.clearToolButtonActive();
 
         const finishBtn = document.getElementById('btn-finish-add-mode');
         if (finishBtn) finishBtn.classList.add('hidden');
@@ -828,6 +1091,11 @@ const MapManager = {
     },
 
     startAddDuctCableMode() {
+        if (this.readOnly) {
+            App.notify('Доступно только чтение', 'warning');
+            return;
+        }
+        this.cancelActiveModes({ silent: true });
         this.addDuctCableMode = true;
         this.selectedDuctCableChannels = [];
         this.map.getContainer().style.cursor = 'crosshair';
@@ -839,6 +1107,8 @@ const MapManager = {
         if (finishBtn) finishBtn.classList.remove('hidden');
         textEl.textContent = 'Кликните на направлениях и выберите каналы. Затем нажмите «Создать»';
 
+        this.setActiveToolButton('btn-add-duct-cable-map');
+
         App.notify('Режим добавления кабеля в канализации: выберите каналы', 'info');
     },
 
@@ -847,6 +1117,8 @@ const MapManager = {
         this.addDuctCableMode = false;
         this.selectedDuctCableChannels = [];
         this.map.getContainer().style.cursor = '';
+
+        this.clearToolButtonActive();
 
         const finishBtn = document.getElementById('btn-finish-add-mode');
         if (finishBtn) finishBtn.classList.add('hidden');
@@ -972,6 +1244,11 @@ const MapManager = {
      * Начало режима добавления направления
      */
     startAddDirectionMode() {
+        if (this.readOnly) {
+            App.notify('Доступно только чтение', 'warning');
+            return;
+        }
+        this.cancelActiveModes({ silent: true });
         this.addDirectionMode = true;
         this.selectedWellsForDirection = [];
         this.map.getContainer().style.cursor = 'crosshair';
@@ -983,7 +1260,7 @@ const MapManager = {
         textEl.textContent = 'Выберите первый колодец';
         
         // Подсвечиваем кнопку
-        document.getElementById('btn-add-direction-map').classList.add('active');
+        this.setActiveToolButton('btn-add-direction-map');
         
         App.notify('Кликните на первый колодец', 'info');
     },
@@ -1000,7 +1277,7 @@ const MapManager = {
         document.getElementById('add-mode-status').classList.add('hidden');
         
         // Убираем подсветку кнопки
-        document.getElementById('btn-add-direction-map')?.classList.remove('active');
+        this.clearToolButtonActive();
         
         // Удаляем временные маркеры
         if (this.tempMarkers) {
@@ -1061,8 +1338,18 @@ const MapManager = {
      * Начало добавления объекта
      */
     startAddingObject(type) {
+        if (this.readOnly) {
+            App.notify('Доступно только чтение', 'warning');
+            return;
+        }
+        this.cancelActiveModes({ silent: true });
         this.addingObject = type;
         this.map.getContainer().style.cursor = 'crosshair';
+        if (type === 'wells') {
+            this.setActiveToolButton('btn-add-well-map');
+        } else if (type === 'markers') {
+            this.setActiveToolButton('btn-add-marker-map');
+        }
         App.notify('Кликните на карте для указания местоположения', 'info');
     },
 
@@ -1073,6 +1360,7 @@ const MapManager = {
         const type = this.addingObject;
         this.addingObject = null;
         this.map.getContainer().style.cursor = '';
+        this.clearToolButtonActive();
         
         // Открываем модальное окно с заполненными координатами
         App.showAddObjectModal(type, latlng.lat, latlng.lng);
@@ -1084,6 +1372,7 @@ const MapManager = {
     cancelAddingObject() {
         this.addingObject = null;
         this.map.getContainer().style.cursor = '';
+        this.clearToolButtonActive();
     },
 
     /**

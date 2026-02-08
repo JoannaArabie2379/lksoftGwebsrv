@@ -191,6 +191,9 @@
                         <button class="btn btn-sm" id="btn-add-well-map" title="Добавить колодец (кликните на карте)">
                             <i class="fas fa-plus-circle"></i>
                         </button>
+                        <button class="btn btn-sm" id="btn-add-marker-map" title="Добавить столбик (кликните на карте)">
+                            <i class="fas fa-map-marker-alt"></i>
+                        </button>
                         <button class="btn btn-sm" id="btn-add-ground-cable-map" title="Добавить кабель в грунте (ломаная линия)">
                             <i class="fas fa-wave-square"></i>
                         </button>
@@ -276,6 +279,28 @@
                         <button class="tab" data-tab="markers">Столбики</button>
                         <button class="tab" data-tab="unified_cables">Кабели</button>
                         <button class="tab" data-tab="groups">Группы</button>
+                    </div>
+
+                    <!-- Панель сортировки/лимита и итогов -->
+                    <div class="filters-row" id="objects-filters-row">
+                        <select id="objects-order-select" class="objects-order-select">
+                            <option value="number_asc">Номер: А-Я</option>
+                            <option value="number_desc">Номер: Я-А</option>
+                            <option value="created_desc">Создан: новые</option>
+                            <option value="created_asc">Создан: старые</option>
+                        </select>
+                        <select id="objects-limit-select" class="objects-limit-select">
+                            <option value="25">25 на страницу</option>
+                            <option value="50" selected>50 на страницу</option>
+                            <option value="100">100 на страницу</option>
+                            <option value="200">200 на страницу</option>
+                        </select>
+                        <div class="objects-totals" id="objects-totals">
+                            <span id="objects-count-label">Кол-во объектов</span>
+                            <strong id="objects-count">0</strong>
+                            <span id="objects-length-label" class="hidden">Общая протяженность</span>
+                            <strong id="objects-length-sum" class="hidden">0</strong>
+                        </div>
                     </div>
 
                     <!-- Фильтры для вкладки "Кабели" -->
