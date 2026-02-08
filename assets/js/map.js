@@ -1538,6 +1538,8 @@ const MapManager = {
                     if (newIds.length) this.highlightCableRouteDirections(this.relocateDuctCableId);
                     else this.clearHighlight();
                 } catch (_) {}
+                // Обновляем слой duct-кабелей, чтобы геометрия/длина на карте были актуальны
+                try { await this.loadCables('duct'); } catch (_) {}
                 App.notify('Участок удалён из маршрута', 'success');
             } catch (e) {
                 App.notify(e?.message || 'Ошибка изменения маршрута', 'error');
@@ -1592,6 +1594,8 @@ const MapManager = {
                 route_order: parseInt(rc?.route_order || 0, 10) || 0,
             })).filter(x => x.cable_channel_id > 0 && x.direction_id > 0);
             try { this.highlightCableRouteDirections(this.relocateDuctCableId); } catch (_) {}
+            // Обновляем слой duct-кабелей, чтобы геометрия/длина на карте были актуальны
+            try { await this.loadCables('duct'); } catch (_) {}
             App.notify('Канал добавлен в маршрут', 'success');
         } catch (e) {
             App.notify(e?.message || 'Ошибка изменения маршрута', 'error');
