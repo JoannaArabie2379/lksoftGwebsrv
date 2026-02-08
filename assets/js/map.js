@@ -2136,6 +2136,7 @@ const MapManager = {
             this.clearHighlight();
             if (!fc || fc.type !== 'FeatureCollection') return;
             this.highlightLayer = L.geoJSON(fc, {
+                interactive: false,
                 style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' })
             }).addTo(this.map);
             this.setHighlightBarVisible(true);
@@ -2150,7 +2151,7 @@ const MapManager = {
             const layer = this.findLayerByMeta('unified_cable', cableId);
             const latlngs = layer?.getLatLngs?.();
             if (!latlngs) return;
-            this.highlightLayer = L.polyline(latlngs, { color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }).addTo(this.map);
+            this.highlightLayer = L.polyline(latlngs, { interactive: false, color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }).addTo(this.map);
             this.setHighlightBarVisible(true);
             const bounds = this.highlightLayer.getBounds();
             if (bounds && bounds.isValid()) {
@@ -2167,7 +2168,7 @@ const MapManager = {
             if (!geometry) return;
             this.highlightLayer = L.geoJSON(
                 { type: 'FeatureCollection', features: [{ type: 'Feature', geometry, properties: {} }] },
-                { style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }) }
+                { interactive: false, style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }) }
             ).addTo(this.map);
             this.setHighlightBarVisible(true);
             const bounds = this.highlightLayer.getBounds();
@@ -2185,6 +2186,7 @@ const MapManager = {
             const resp = await API.unifiedCables.routeDirectionsGeojson(cableId);
             if (resp && resp.type === 'FeatureCollection') {
                 this.highlightLayer = L.geoJSON(resp, {
+                    interactive: false,
                     style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' })
                 }).addTo(this.map);
                 this.setHighlightBarVisible(true);
