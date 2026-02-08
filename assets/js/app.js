@@ -1220,6 +1220,11 @@ const App = {
                         // ignore
                     }
                 }
+
+                // Итоги по прочим вкладкам объектов (справа от фильтров)
+                try {
+                    await this.updateObjectsTotalsForTab(this.currentTab, params, response);
+                } catch (_) {}
             } else {
                 console.error('API returned error:', response);
                 this.notify('Ошибка загрузки данных', 'error');
@@ -1228,6 +1233,58 @@ const App = {
             console.error('Ошибка загрузки объектов:', error);
             this.notify('Ошибка загрузки данных', 'error');
         }
+    },
+
+    async updateObjectsTotalsForTab(tab, params, response) {
+        const el = document.getElementById('objects-totals');
+        if (!el) return;
+
+        // Пусто для вкладок, где общий фильтр скрыт
+        if (tab === 'unified_cables' || tab === 'groups') {
+            el.innerHTML = '';
+            return;
+        }
+
+        // Базовый total берём из пагинации ответа
+        const total = Number(response?.pagination?.total ?? this.pagination?.total ?? 0) || 0;
+
+        if (tab === 'directions') {
+            const statsParams = { ...(params || {}) };
+            delete statsParams.page;
+            delete statsParams.limit;
+            try {
+                const statsResp = await API.channelDirections.stats(statsParams);
+                if (statsResp?.success === false) throw new Error(statsResp?.message || 'Ошибка');
+                const data = statsResp?.data || statsResp || {};
+                const cnt = Number(data.count ?? total ?? 0) || 0;
+                const sum = Number(data.length_sum ?? 0) || 0;
+                el.innerHTML = `
+                    <span>Кол-во направлений: <strong>${cnt}</strong></span>
+                    <span>Общая протяженность (м): <strong>${sum.toFixed(2)}</strong></span>
+                `;
+                return;
+            } catch (_) {
+                // fallback
+                el.innerHTML = `<span>Кол-во направлений: <strong>${total}</strong></span>`;
+                return;
+            }
+        }
+
+        if (tab === 'wells') {
+            el.innerHTML = `<span>Кол-во объектов колодцы: <strong>${total}</strong></span>`;
+            return;
+        }
+        if (tab === 'channels') {
+            el.innerHTML = `<span>Кол-во объектов каналы: <strong>${total}</strong></span>`;
+            return;
+        }
+        if (tab === 'markers') {
+            el.innerHTML = `<span>Кол-во объектов столбики: <strong>${total}</strong></span>`;
+            return;
+        }
+
+        // default
+        el.innerHTML = `<span>Количество: <strong>${total}</strong></span>`;
     },
 
     /**

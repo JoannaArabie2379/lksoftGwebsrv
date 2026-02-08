@@ -337,6 +337,10 @@ const API = {
             return API.get('/channel-directions', params);
         },
 
+        stats(params = {}) {
+            return API.get('/channel-directions/stats', params);
+        },
+
         geojson(params = {}) {
             return API.get('/channel-directions/geojson', params);
         },

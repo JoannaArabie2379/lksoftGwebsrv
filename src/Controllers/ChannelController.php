@@ -154,6 +154,39 @@ class ChannelController extends BaseController
     }
 
     /**
+     * GET /api/channel-directions/stats
+     * Агрегации по текущему фильтру (кол-во и сумма протяжённости направлений).
+     */
+    public function stats(): void
+    {
+        $filters = $this->buildFilters([
+            'owner_id' => 'cd.owner_id',
+            'type_id' => 'cd.type_id',
+            'status_id' => 'cd.status_id',
+            'start_well_id' => 'cd.start_well_id',
+            'end_well_id' => 'cd.end_well_id',
+            '_search' => ['cd.number', 'cd.notes'],
+        ]);
+
+        $where = $filters['where'];
+        $params = $filters['params'];
+
+        $sql = "SELECT COUNT(*) as cnt,
+                       COALESCE(SUM(COALESCE(cd.length_m, 0)), 0) as length_sum
+                FROM channel_directions cd";
+        if ($where) {
+            $sql .= " WHERE {$where}";
+        }
+
+        $row = $this->db->fetch($sql, $params) ?: ['cnt' => 0, 'length_sum' => 0];
+
+        Response::success([
+            'count' => (int) ($row['cnt'] ?? 0),
+            'length_sum' => (float) ($row['length_sum'] ?? 0),
+        ]);
+    }
+
+    /**
      * GET /api/channel-directions/geojson
      * GeoJSON всех направлений для карты
      */
