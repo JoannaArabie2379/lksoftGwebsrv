@@ -71,13 +71,74 @@ class DbBackupController extends BaseController
         return 'IGS_DB_BACKUP_TICK';
     }
 
+    private function buildCronScheduleExpr(int $intervalHours): string
+    {
+        // cron не умеет "каждые N часов" напрямую для N > 24 (и не для всех случаев),
+        // поэтому:
+        // - если interval <= 24: ставим запуск по часам (minute=0)
+        // - если interval кратен 24: используем шаг по дням (minute=0 hour=0)
+        // - иначе: запускаем раз в час и полагаемся на due-check внутри tick-скрипта
+        if ($intervalHours < 1) $intervalHours = 24;
+        if ($intervalHours <= 24) {
+            if ($intervalHours === 24) return '0 0 * * *';
+            return '0 */' . $intervalHours . ' * * *';
+        }
+        if (($intervalHours % 24) === 0) {
+            $days = (int) ($intervalHours / 24);
+            if ($days <= 1) return '0 0 * * *';
+            return '0 0 */' . $days . ' * *';
+        }
+        return '0 * * * *';
+    }
+
     private function buildCronLine(): string
     {
         $php = $this->detectPhpCliBinary();
         $script = $this->cliScriptPath();
-        $log = $this->ensureBackupDir() . '/cron.log';
-        // Запускаем часто, а решение "пора/не пора" принимает tick-скрипт по настройкам interval_hours
-        return "*/10 * * * * {$php} {$script} >> {$log} 2>&1 # " . $this->cronMarker();
+        // Обеспечим существование директории бэкапов (там же будет cron.log, который ведёт сам CLI-скрипт)
+        $this->ensureBackupDir();
+
+        $enabled = (string) ($this->getSetting('db_backup_schedule_enabled', '0') ?? '0');
+        $interval = (int) ((string) ($this->getSetting('db_backup_interval_hours', '24') ?? '24'));
+        if ($interval < 1) $interval = 24;
+        $keepRaw = (string) ($this->getSetting('db_backup_keep_count', '') ?? '');
+        $keep = ($keepRaw === '') ? null : (int) $keepRaw;
+
+        $schedule = $this->buildCronScheduleExpr($interval);
+        $marker = $this->cronMarker();
+        $keepStr = ($keep === null ? 'all' : (string) $keep);
+        $state = ($enabled === '1') ? 'enabled' : 'disabled';
+
+        // Важно: НЕ используем ">> cron.log" снаружи, иначе ротация из PHP-скрипта не будет работать
+        // (редирект открывает файл ДО запуска процесса).
+        $phpQ = escapeshellarg($php);
+        $scriptQ = escapeshellarg($script);
+        return "{$schedule} {$phpQ} {$scriptQ} --cron >/dev/null 2>&1 # {$marker} interval={$interval}h keep={$keepStr} {$state}";
+    }
+
+    private function cronInstalledFromText(string $text): bool
+    {
+        return (strpos($text, $this->cronMarker()) !== false);
+    }
+
+    private function applyCronInstallText(string $existingText, string $line): string
+    {
+        $marker = $this->cronMarker();
+        $lines = preg_split("/\r\n|\n|\r/", (string) $existingText);
+        $lines = array_values(array_filter($lines, fn($l) => trim((string) $l) !== ''));
+        // удалим старые строки маркера
+        $lines = array_values(array_filter($lines, fn($l) => strpos((string) $l, $marker) === false));
+        $lines[] = $line;
+        return implode("\n", $lines) . "\n";
+    }
+
+    private function applyCronRemoveText(string $existingText): string
+    {
+        $marker = $this->cronMarker();
+        $lines = preg_split("/\r\n|\n|\r/", (string) $existingText);
+        $lines = array_values(array_filter($lines, fn($l) => trim((string) $l) !== ''));
+        $lines = array_values(array_filter($lines, fn($l) => strpos((string) $l, $marker) === false));
+        return $lines ? (implode("\n", $lines) . "\n") : '';
     }
 
     private function readCrontab(): array
@@ -228,7 +289,7 @@ class DbBackupController extends BaseController
         $this->requireAdmin();
         $line = $this->buildCronLine();
         $ct = $this->readCrontab();
-        $installed = (strpos((string) ($ct['text'] ?? ''), $this->cronMarker()) !== false);
+        $installed = $this->cronInstalledFromText((string) ($ct['text'] ?? ''));
         Response::success([
             'installed' => $installed,
             'line' => $line,
@@ -245,14 +306,7 @@ class DbBackupController extends BaseController
         $line = $this->buildCronLine();
         $ct = $this->readCrontab();
         $text = (string) ($ct['text'] ?? '');
-        $marker = $this->cronMarker();
-
-        $lines = preg_split("/\r\n|\n|\r/", $text);
-        $lines = array_values(array_filter($lines, fn($l) => trim((string) $l) !== ''));
-        // удалим старые строки маркера
-        $lines = array_values(array_filter($lines, fn($l) => strpos((string) $l, $marker) === false));
-        $lines[] = $line;
-        $newText = implode("\n", $lines) . "\n";
+        $newText = $this->applyCronInstallText($text, $line);
 
         // проверим существование CLI скрипта
         if (!is_file($this->cliScriptPath())) {
@@ -270,12 +324,8 @@ class DbBackupController extends BaseController
         $this->requireAdmin();
         $ct = $this->readCrontab();
         $text = (string) ($ct['text'] ?? '');
-        $marker = $this->cronMarker();
-        $lines = preg_split("/\r\n|\n|\r/", $text);
-        $lines = array_values(array_filter($lines, fn($l) => trim((string) $l) !== ''));
-        $lines = array_values(array_filter($lines, fn($l) => strpos((string) $l, $marker) === false));
-        $newText = $lines ? (implode("\n", $lines) . "\n") : "";
-        if ($newText === "") {
+        $newText = $this->applyCronRemoveText($text);
+        if ($newText === '') {
             // удалить crontab целиком
             $this->runCommand(['bash', '-lc', 'crontab -r 2>/dev/null || true'], [], 10);
         } else {
@@ -312,6 +362,29 @@ class DbBackupController extends BaseController
         } catch (\Throwable $e) {
             $this->db->rollback();
             throw $e;
+        }
+
+        // Если правило в crontab уже установлено — автоматически обновляем его под новые настройки.
+        // Если расписание выключено — удаляем правило.
+        try {
+            $ct = $this->readCrontab();
+            $ctText = (string) ($ct['text'] ?? '');
+            if ($this->cronInstalledFromText($ctText)) {
+                if ($enabled === '1') {
+                    $line = $this->buildCronLine(); // уже с новыми настройками
+                    $newText = $this->applyCronInstallText($ctText, $line);
+                    $this->writeCrontab($newText);
+                } else {
+                    $newText = $this->applyCronRemoveText($ctText);
+                    if ($newText === '') {
+                        $this->runCommand(['bash', '-lc', 'crontab -r 2>/dev/null || true'], [], 10);
+                    } else {
+                        $this->writeCrontab($newText);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Не блокируем сохранение настроек, если cron недоступен/запрещён.
         }
 
         Response::success([

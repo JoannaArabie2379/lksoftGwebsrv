@@ -1,7 +1,7 @@
 <?php
 /**
  * CLI: проверка расписания и создание бэкапа БД (pg_dump) при необходимости.
- * Запускать из cron: */10 * * * * php /path/to/storage/cli/db_backup_tick.php
+ * Запускать из cron: см. "Настройки -> Бэкапирование СУБД" (строка crontab генерируется приложением)
  *
  * Важно: этот скрипт НЕ требует авторизации, поэтому должен быть доступен только локально (не через web).
  * Папка storage закрыта в .htaccess.
@@ -13,6 +13,11 @@ $app = require __DIR__ . '/../../config/app.php';
 date_default_timezone_set($app['timezone'] ?? 'UTC');
 
 $dbCfg = require __DIR__ . '/../../config/database.php';
+
+// args
+$argv = $argv ?? [];
+$isCron = in_array('--cron', $argv, true);
+$verbose = in_array('--verbose', $argv, true);
 
 function pdoConnect(array $cfg): PDO {
     $dsn = sprintf('pgsql:host=%s;port=%s;dbname=%s', $cfg['host'], $cfg['port'], $cfg['dbname']);
@@ -44,6 +49,42 @@ function setSetting(PDO $pdo, string $code, string $value): void {
 function ensureDir(string $dir): void {
     if (!is_dir($dir)) {
         @mkdir($dir, 0755, true);
+    }
+}
+
+function rotateLog(string $path, int $maxBytes = 5242880, int $keepCopies = 2): void {
+    // Ротация по размеру, чтобы cron.log не разрастался и не забивал диск.
+    // keepCopies=2 => cron.log.1, cron.log.2
+    try {
+        if (!is_file($path)) return;
+        $sz = (int) (@filesize($path) ?: 0);
+        if ($sz <= $maxBytes) return;
+
+        $keepCopies = max(1, (int) $keepCopies);
+        for ($i = $keepCopies; $i >= 1; $i--) {
+            $from = $path . '.' . $i;
+            $to = $path . '.' . ($i + 1);
+            if ($i === $keepCopies) {
+                // удалим самый старый, если есть
+                if (is_file($from)) @unlink($from);
+            } else {
+                if (is_file($from)) @rename($from, $to);
+            }
+        }
+        @rename($path, $path . '.1');
+        @file_put_contents($path, '');
+    } catch (Throwable $e) {
+        // молча
+    }
+}
+
+function logLine(string $path, string $line): void {
+    try {
+        rotateLog($path);
+        $ts = date('c');
+        @file_put_contents($path, "[{$ts}] {$line}\n", FILE_APPEND | LOCK_EX);
+    } catch (Throwable $e) {
+        // молча
     }
 }
 
@@ -96,7 +137,12 @@ function retention(string $dir, int $keep): void {
 try {
     $pdo = pdoConnect($dbCfg);
 } catch (Throwable $e) {
-    fwrite(STDERR, "DB connect error: " . $e->getMessage() . "\n");
+    $root = realpath(__DIR__ . '/../../') ?: (__DIR__ . '/../../');
+    $dir = $root . '/storage/db_backups';
+    ensureDir($dir);
+    $log = $dir . '/cron.log';
+    logLine($log, "DB connect error: " . $e->getMessage());
+    if (!$isCron) fwrite(STDERR, "DB connect error: " . $e->getMessage() . "\n");
     exit(2);
 }
 
@@ -118,6 +164,7 @@ if (!$due) {
 $root = realpath(__DIR__ . '/../../') ?: (__DIR__ . '/../../');
 $dir = $root . '/storage/db_backups';
 ensureDir($dir);
+$log = $dir . '/cron.log';
 
 $ts = date('Ymd_His');
 $safeDb = preg_replace('/[^A-Za-z0-9_]+/', '_', (string) ($dbCfg['dbname'] ?? 'db'));
@@ -140,7 +187,9 @@ $cmd = [
 $res = runCmd($cmd, $env, 1200);
 if ((int) ($res['exit_code'] ?? 1) !== 0) {
     @unlink($path);
-    fwrite(STDERR, "pg_dump error: " . trim((string) ($res['stderr'] ?? '')) . "\n");
+    $err = trim((string) ($res['stderr'] ?? ''));
+    logLine($log, "pg_dump error: {$err}");
+    if (!$isCron) fwrite(STDERR, "pg_dump error: {$err}\n");
     exit(1);
 }
 
@@ -150,6 +199,14 @@ $keepRaw = (string) (getSetting($pdo, 'db_backup_keep_count', '') ?? '');
 $keep = ($keepRaw === '') ? 0 : (int) $keepRaw;
 if ($keep > 0) retention($dir, $keep);
 
-echo "OK: created {$name}\n";
+if ($verbose) {
+    logLine($log, "OK: created {$name} (interval={$interval}h keep=" . ($keep > 0 ? $keep : 'all') . ")");
+} else {
+    logLine($log, "OK: created {$name}");
+}
+
+if (!$isCron) {
+    echo "OK: created {$name}\n";
+}
 exit(0);
 

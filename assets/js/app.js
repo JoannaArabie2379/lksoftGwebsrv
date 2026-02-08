@@ -4166,6 +4166,8 @@ const App = {
             if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
             this.notify('Настройки бэкапа сохранены', 'success');
             await this.loadDbBackupConfig();
+            // строка/статус crontab зависит от interval_hours и может обновляться автоматически на сервере
+            await this.loadDbBackupCronInfo();
         } catch (e) {
             this.notify(e?.message || 'Ошибка сохранения', 'error');
         }
