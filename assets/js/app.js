@@ -4036,18 +4036,24 @@ const App = {
 
         // По ролям: не-админ не может менять системные разделы настроек
         if (!this.isAdmin()) {
+            const roleCode = (this.user?.role?.code || '').toString();
+            // "Настройка ссылок меню" — персональная и доступна роли "Пользователь"
+            const canEditLinks = (roleCode === 'user');
             const disable = (el) => {
                 if (!el) return;
                 el.disabled = true;
                 try { el.style.background = 'var(--bg-tertiary)'; } catch (_) {}
             };
-            [
+            const toDisable = [
                 z, lat, lng,
                 wDir, wCable, iconSize, fsWell, fsDirLen,
-                geo, cad,
                 wmtsUrlTmpl, wmtsStyle, wmtsTms, wmtsTm, wmtsTr, wmtsTc,
                 entryKind,
-            ].forEach(disable);
+            ];
+            if (!canEditLinks) {
+                toDisable.push(geo, cad);
+            }
+            toDisable.forEach(disable);
         }
 
         // Админ: секция бэкапов СУБД

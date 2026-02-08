@@ -24,7 +24,8 @@ class SettingsController extends BaseController
             'icon_size_well_marker' => '12',
             'font_size_well_number_label' => '12',
             'font_size_direction_length_label' => '12',
-            'url_geoproj' => 'https://geoproj.ru/',
+            // Ресурс пересчёта координат (по умолчанию)
+            'url_geoproj' => 'https://wgs-msk.soilbox.app/',
             'url_cadastre' => 'https://nspd.gov.ru/map?zoom=16.801685060501118&theme_id=1&coordinate_x=8535755.537972113&coordinate_y=9908336.650357058&baseLayerId=235&is_copy_url=true',
             // Персональные слои карты (CSV: wells,channels,markers,groundCables,aerialCables,ductCables)
             'map_layers' => 'wells,channels,markers',
@@ -125,7 +126,7 @@ class SettingsController extends BaseController
 
         // По ТЗ:
         // - администратор: все настройки
-        // - пользователь/только чтение: только персональные настройки (без системных разделов данных/интерфейса/WMTS/ссылок)
+        // - пользователь/только чтение: только персональные настройки (без системных разделов данных/интерфейса/WMTS)
         $allowed = $isAdmin ? [
             'map_default_zoom',
             'map_default_lat',
@@ -190,6 +191,12 @@ class SettingsController extends BaseController
             'hotkey_add_aerial_cable',
             'well_entry_point_kind_code',
         ];
+
+        // Роль "Пользователь": разрешаем персональную настройку ссылок меню
+        if (!$isAdmin && Auth::hasRole('user')) {
+            $allowed[] = 'url_geoproj';
+            $allowed[] = 'url_cadastre';
+        }
 
         $toSave = array_intersect_key($data, array_flip($allowed));
 
