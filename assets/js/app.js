@@ -2705,15 +2705,9 @@ const App = {
                     if (geomBlock) geomBlock.style.display = 'none';
                     if (routeBlock) {
                         routeBlock.style.display = 'block';
-                        this.loadCableRouteOptions().then(() => {
-                            // Предвыбор каналов из API
-                            const select = document.getElementById('cable-route-channels');
-                            const ids = (this._editCableRouteChannelIds || []).map(v => parseInt(v));
-                            if (select && ids.length) {
-                                const set = new Set(ids);
-                                Array.from(select.options).forEach(o => o.selected = set.has(parseInt(o.value)));
-                            }
-                        });
+                        // Предвыбор каналов из API (включая каналы, которые могут не попасть в limit)
+                        const ids = (this._editCableRouteChannelIds || []).map(v => parseInt(v)).filter(v => v > 0);
+                        this.loadCableRouteOptions(ids).catch(() => {});
                     }
                 } else if (objectTypeCode === 'cable_ground' || objectTypeCode === 'cable_aerial') {
                     if (routeBlock) routeBlock.style.display = 'none';
@@ -5946,17 +5940,19 @@ const App = {
             }
         }
 
-        // Даём загрузиться опциям маршрута
-        await new Promise(r => setTimeout(r, 200));
+        // Предвыбор маршрута (для режима "кратчайший путь")
+        this._prefillCableRouteChannelIds = Array.isArray(channelIds)
+            ? channelIds.map(v => parseInt(v, 10)).filter(v => v > 0)
+            : [];
 
-        const channelsSelect = document.getElementById('cable-route-channels');
-        if (channelsSelect && Array.isArray(channelIds)) {
-            const set = new Set(channelIds.map(v => parseInt(v)));
-            Array.from(channelsSelect.options).forEach(opt => {
-                const id = parseInt(opt.value);
-                opt.selected = set.has(id);
-            });
-        }
+        // Загрузим опции маршрута и гарантируем, что все нужные channelId присутствуют и выбраны
+        try {
+            if (this._prefillCableRouteChannelIds.length) {
+                await this.loadCableRouteOptions(this._prefillCableRouteChannelIds);
+            } else {
+                await this.loadCableRouteOptions();
+            }
+        } catch (_) {}
     },
 
     async showCablesInWell(wellId) {
@@ -6165,7 +6161,10 @@ const App = {
             // Кабель в канализации - показываем маршрут
             geomBlock.style.display = 'none';
             routeBlock.style.display = 'block';
-            this.loadCableRouteOptions();
+            // Если маршрут был передан извне (кратчайший путь) — предвыбираем
+            const ids = Array.isArray(this._prefillCableRouteChannelIds) ? this._prefillCableRouteChannelIds : [];
+            if (ids && ids.length) this.loadCableRouteOptions(ids).catch(() => {});
+            else this.loadCableRouteOptions().catch(() => {});
         } else if (objectTypeCode === 'cable_ground' || objectTypeCode === 'cable_aerial') {
             // Кабель в грунте или воздушный - показываем координаты
             geomBlock.style.display = 'block';
@@ -6249,16 +6248,52 @@ const App = {
     /**
      * Загрузка опций для маршрута кабеля в канализации
      */
-    async loadCableRouteOptions() {
+    async loadCableRouteOptions(requiredIds = null) {
         try {
             const channelsResponse = await API.cableChannels.list({ limit: 1000 });
             const channelsSelect = document.getElementById('cable-route-channels');
             
             if (channelsSelect && channelsResponse.success !== false) {
+                const required = Array.isArray(requiredIds)
+                    ? requiredIds.map(v => parseInt(v, 10)).filter(v => v > 0)
+                    : [];
+                // сохраняем текущий выбор, если это просто перезагрузка списка
+                const prevSelected = new Set(Array.from(channelsSelect.selectedOptions || []).map(o => String(o.value)));
                 const channels = channelsResponse.data || channelsResponse;
                 channelsSelect.innerHTML = channels.map(c => 
                     `<option value="${c.id}">Канал ${c.channel_number} (${c.direction_number || '-'})</option>`
                 ).join('');
+
+                // Если некоторые каналы маршрута не попали в limit (1000) — подтянем точечно
+                if (required.length) {
+                    const existing = new Set(Array.from(channelsSelect.options).map(o => parseInt(o.value, 10)));
+                    for (const id of required) {
+                        if (existing.has(id)) continue;
+                        try {
+                            const r = await API.cableChannels.get(id);
+                            const ch = r?.data || r;
+                            if (ch && ch.id) {
+                                const opt = document.createElement('option');
+                                opt.value = String(ch.id);
+                                opt.textContent = `Канал ${ch.channel_number || '-'} (${ch.direction_number || ch.direction_id || '-'})`;
+                                channelsSelect.appendChild(opt);
+                                existing.add(parseInt(ch.id, 10));
+                            }
+                        } catch (_) {
+                            // ignore missing
+                        }
+                    }
+                }
+
+                // Восстанавливаем выбор:
+                // - если задан requiredIds — выбираем их (для кратчайшего пути/редактирования)
+                // - иначе возвращаем предыдущий выбор
+                if (required.length) {
+                    const set = new Set(required.map(v => String(v)));
+                    Array.from(channelsSelect.options).forEach(o => { o.selected = set.has(String(o.value)); });
+                } else if (prevSelected.size) {
+                    Array.from(channelsSelect.options).forEach(o => { o.selected = prevSelected.has(String(o.value)); });
+                }
             }
         } catch (error) {
             console.error('Ошибка загрузки опций маршрута:', error);
