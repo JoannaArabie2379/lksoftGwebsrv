@@ -4245,13 +4245,14 @@ const App = {
         document.getElementById('modal-footer').innerHTML = footer;
         const modal = document.getElementById('modal');
         // сброс вариантов позиционирования/режимов
-        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right');
+        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right', 'modal-top-right');
         // применяем опции (если есть)
         try {
             const o = opts || {};
             if (o.nonBlocking) modal.classList.add('modal-nonblocking');
             if (o.position === 'bottom-left') modal.classList.add('modal-bottom-left');
             if (o.position === 'bottom-right') modal.classList.add('modal-bottom-right');
+            if (o.position === 'top-right') modal.classList.add('modal-top-right');
         } catch (_) {}
         modal.classList.remove('hidden');
 
@@ -4272,7 +4273,7 @@ const App = {
         const modal = document.getElementById('modal');
         modal.classList.add('hidden');
         // сбрасываем модификаторы, чтобы следующий показ был "обычным"
-        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right');
+        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right', 'modal-top-right');
     },
 
     /**
@@ -4530,8 +4531,8 @@ const App = {
                 </button>
             `;
             this._shortestDuctCablePath = data;
-            // Неблокирующее окно: снизу-справа, без затемнения карты
-            this.showModal('Кабель в канализации по кратчайшему пути', content, footer, { nonBlocking: true, position: 'bottom-right' });
+            // Неблокирующее окно: сверху-справа, без затемнения карты
+            this.showModal('Кабель в канализации по кратчайшему пути', content, footer, { nonBlocking: true, position: 'top-right' });
         } catch (e) {
             this.notify(e?.message || 'Не удалось рассчитать путь', 'error');
         }
@@ -4582,7 +4583,7 @@ const App = {
                     </div>
                 `;
                 const footer = `<button class="btn btn-secondary" onclick="App.cancelShortestPathChannelPick()">Отмена</button>`;
-                this.showModal('Выберите канал направления', content, footer, { nonBlocking: true, position: 'bottom-right' });
+                this.showModal('Выберите канал направления', content, footer, { nonBlocking: true, position: 'top-right' });
             });
             if (!picked) return; // cancelled
             selected.push(parseInt(picked, 10));
