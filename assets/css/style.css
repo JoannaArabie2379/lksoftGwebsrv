@@ -842,6 +842,19 @@ tr:hover {
     color: white;
 }
 
+.pagination select {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.pagination select:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
 /* Filters Row */
 .filters-row {
     display: flex;
