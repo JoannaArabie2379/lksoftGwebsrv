@@ -65,7 +65,19 @@ class GroupController extends BaseController
         
         $filters = $this->buildFilters([
             'group_type' => 'g.group_type',
-            '_search' => ['g.number', 'g.name', 'g.description', 'g.request_basis'],
+            // Полнотекстовый поиск по всем полям карточки ТУ (в рамках таблицы object_groups).
+            // Важно: используем только поля алиаса g, т.к. getTotal() не включает JOIN-ы.
+            '_search' => [
+                'g.id::text',
+                'g.number',
+                'g.name',
+                'g.description',
+                'g.group_type',
+                'g.tu_date::text',
+                'g.request_basis',
+                'g.created_at::text',
+                'g.updated_at::text',
+            ],
         ]);
 
         $where = $filters['where'];
@@ -108,7 +120,17 @@ class GroupController extends BaseController
     {
         $filters = $this->buildFilters([
             'group_type' => 'g.group_type',
-            '_search' => ['g.number', 'g.name', 'g.description', 'g.request_basis'],
+            '_search' => [
+                'g.id::text',
+                'g.number',
+                'g.name',
+                'g.description',
+                'g.group_type',
+                'g.tu_date::text',
+                'g.request_basis',
+                'g.created_at::text',
+                'g.updated_at::text',
+            ],
         ]);
 
         $where = $filters['where'];
