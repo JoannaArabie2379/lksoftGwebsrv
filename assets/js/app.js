@@ -483,9 +483,11 @@ const App = {
                     const anyAdd =
                         !!mm.addDirectionMode ||
                         !!mm.addCableMode ||
-                        !!mm.addDuctCableMode;
+                        !!mm.addDuctCableMode ||
+                        !!mm.addingObject;
                     if (anyAdd) {
                         mm.cancelAddDirectionMode?.();
+                        mm.cancelAddingObject?.();
                         mm.cancelAddCableMode?.();
                         mm.cancelAddDuctCableMode?.();
                     }
@@ -501,6 +503,10 @@ const App = {
                     if (mm.shortestDuctCableMode) {
                         mm.toggleShortestDuctCableMode?.();
                         document.getElementById('btn-add-duct-cable-shortest-map')?.classList?.toggle('active', false);
+                    }
+                    if (mm.stuffWellMode) {
+                        mm.toggleStuffWellMode?.();
+                        document.getElementById('btn-stuff-well-map')?.classList?.toggle('active', false);
                     }
                 } catch (_) {}
             });
@@ -544,18 +550,73 @@ const App = {
         }
 
         // Панель инструментов карты
-        document.getElementById('btn-add-direction-map')?.addEventListener('click', () => MapManager.startAddDirectionMode());
-        document.getElementById('btn-add-well-map')?.addEventListener('click', () => MapManager.startAddingObject('wells'));
+        document.getElementById('btn-add-direction-map')?.addEventListener('click', () => {
+            if (MapManager.addDirectionMode) MapManager.cancelAddDirectionMode?.();
+            else {
+                MapManager.cancelAddingObject?.();
+                MapManager.cancelAddCableMode?.({ notify: false });
+                MapManager.cancelAddDuctCableMode?.({ notify: false });
+                MapManager.startAddDirectionMode();
+            }
+        });
+        document.getElementById('btn-add-well-map')?.addEventListener('click', () => {
+            if (MapManager.addingObject === 'wells') {
+                MapManager.cancelAddingObject?.();
+                return;
+            }
+            MapManager.cancelAddDirectionMode?.();
+            MapManager.cancelAddCableMode?.({ notify: false });
+            MapManager.cancelAddDuctCableMode?.({ notify: false });
+            MapManager.startAddingObject('wells');
+        });
         document.getElementById('btn-stuff-well-map')?.addEventListener('click', (e) => {
             try {
                 MapManager.toggleStuffWellMode?.();
                 e.currentTarget?.classList?.toggle('active', !!MapManager.stuffWellMode);
             } catch (_) {}
         });
-        document.getElementById('btn-add-marker-map')?.addEventListener('click', () => MapManager.startAddingObject('markers'));
-        document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_ground'));
-        document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => MapManager.startAddCableMode('cable_aerial'));
-        document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => MapManager.startAddDuctCableMode());
+        document.getElementById('btn-add-marker-map')?.addEventListener('click', () => {
+            if (MapManager.addingObject === 'markers') {
+                MapManager.cancelAddingObject?.();
+                return;
+            }
+            MapManager.cancelAddDirectionMode?.();
+            MapManager.cancelAddCableMode?.({ notify: false });
+            MapManager.cancelAddDuctCableMode?.({ notify: false });
+            MapManager.startAddingObject('markers');
+        });
+        document.getElementById('btn-add-ground-cable-map')?.addEventListener('click', () => {
+            if (MapManager.addCableMode && MapManager.addCableTypeCode === 'cable_ground') {
+                MapManager.cancelAddCableMode?.();
+                return;
+            }
+            MapManager.cancelAddDirectionMode?.();
+            MapManager.cancelAddingObject?.();
+            MapManager.cancelAddDuctCableMode?.({ notify: false });
+            MapManager.cancelAddCableMode?.({ notify: false });
+            MapManager.startAddCableMode('cable_ground');
+        });
+        document.getElementById('btn-add-aerial-cable-map')?.addEventListener('click', () => {
+            if (MapManager.addCableMode && MapManager.addCableTypeCode === 'cable_aerial') {
+                MapManager.cancelAddCableMode?.();
+                return;
+            }
+            MapManager.cancelAddDirectionMode?.();
+            MapManager.cancelAddingObject?.();
+            MapManager.cancelAddDuctCableMode?.({ notify: false });
+            MapManager.cancelAddCableMode?.({ notify: false });
+            MapManager.startAddCableMode('cable_aerial');
+        });
+        document.getElementById('btn-add-duct-cable-map')?.addEventListener('click', () => {
+            if (MapManager.addDuctCableMode) {
+                MapManager.cancelAddDuctCableMode?.();
+                return;
+            }
+            MapManager.cancelAddDirectionMode?.();
+            MapManager.cancelAddingObject?.();
+            MapManager.cancelAddCableMode?.({ notify: false });
+            MapManager.startAddDuctCableMode();
+        });
         document.getElementById('btn-add-duct-cable-shortest-map')?.addEventListener('click', (e) => {
             try {
                 MapManager.toggleShortestDuctCableMode?.();

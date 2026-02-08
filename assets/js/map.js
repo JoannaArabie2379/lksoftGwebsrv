@@ -1671,6 +1671,7 @@ const MapManager = {
             this._shortestWellHits = [];
             if (this.map) this.map.getContainer().style.cursor = '';
             try { this.clearHighlight(); } catch (_) {}
+            try { App.notify('Кратчайший путь: режим выключен', 'info'); } catch (_) {}
         }
     },
 
@@ -1810,6 +1811,7 @@ const MapManager = {
             this.relocateDuctCablePendingDirection = null;
             if (this.map) this.map.getContainer().style.cursor = '';
             try { this.clearHighlight(); } catch (_) {}
+            try { App.notify('Переложить кабель: режим выключен', 'info'); } catch (_) {}
         }
     },
 
@@ -1833,13 +1835,17 @@ const MapManager = {
         }
     },
 
-    cancelMovePointMode() {
+    cancelMovePointMode(opts = null) {
         this.movePointMode = false;
         this.movePointSelected = null;
         this.movePointPickCandidates = [];
         try { if (this.movePointMarker) this.map.removeLayer(this.movePointMarker); } catch (_) {}
         this.movePointMarker = null;
         if (this.map) this.map.getContainer().style.cursor = '';
+        try {
+            const o = opts || {};
+            if (o.notify !== false) App.notify('Режим перемещения отменён', 'info');
+        } catch (_) {}
     },
 
     async commitMovePoint() {
@@ -1861,7 +1867,7 @@ const MapManager = {
                 resp = await API.markerPosts.update(sel.id, { latitude: lat, longitude: lng });
             }
             if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
-            this.cancelMovePointMode();
+            this.cancelMovePointMode({ notify: false });
             try { document.getElementById('btn-move-point-map')?.classList?.toggle('active', false); } catch (_) {}
             App.notify('Объект перемещён', 'success');
             try { await this.loadAllLayers?.(); } catch (_) {}
@@ -1877,6 +1883,7 @@ const MapManager = {
             App.notify('Кликните по направлению на карте, чтобы набить колодец', 'info');
         } else {
             if (this.map) this.map.getContainer().style.cursor = '';
+            try { App.notify('Режим "Набить колодец" выключен', 'info'); } catch (_) {}
         }
     },
 
@@ -2437,6 +2444,12 @@ const MapManager = {
         this.selectedCablePoints = [];
         this.map.getContainer().style.cursor = 'crosshair';
 
+        // Подсвечиваем кнопку инструмента
+        try {
+            const btnId = (typeCode === 'cable_aerial') ? 'btn-add-aerial-cable-map' : 'btn-add-ground-cable-map';
+            document.getElementById(btnId)?.classList?.add('active');
+        } catch (_) {}
+
         const statusEl = document.getElementById('add-mode-status');
         const textEl = document.getElementById('add-mode-text');
         const finishBtn = document.getElementById('btn-finish-add-mode');
@@ -2450,12 +2463,18 @@ const MapManager = {
     /**
      * Отмена режима добавления кабеля
      */
-    cancelAddCableMode() {
+    cancelAddCableMode(opts = null) {
         if (!this.addCableMode) return;
         this.addCableMode = false;
         this.addCableTypeCode = null;
         this.selectedCablePoints = [];
         this.map.getContainer().style.cursor = '';
+
+        // Снимаем подсветку кнопок
+        try {
+            document.getElementById('btn-add-ground-cable-map')?.classList?.remove('active');
+            document.getElementById('btn-add-aerial-cable-map')?.classList?.remove('active');
+        } catch (_) {}
 
         const finishBtn = document.getElementById('btn-finish-add-mode');
         if (finishBtn) finishBtn.classList.add('hidden');
@@ -2474,12 +2493,19 @@ const MapManager = {
         if (!this.addDirectionMode && !this.addingObject) {
             document.getElementById('add-mode-status').classList.add('hidden');
         }
+        try {
+            const o = opts || {};
+            if (o.notify !== false) App.notify('Режим добавления кабеля отменён', 'info');
+        } catch (_) {}
     },
 
     startAddDuctCableMode() {
         this.addDuctCableMode = true;
         this.selectedDuctCableChannels = [];
         this.map.getContainer().style.cursor = 'crosshair';
+
+        // Подсвечиваем кнопку инструмента
+        try { document.getElementById('btn-add-duct-cable-map')?.classList?.add('active'); } catch (_) {}
 
         const statusEl = document.getElementById('add-mode-status');
         const textEl = document.getElementById('add-mode-text');
@@ -2491,11 +2517,13 @@ const MapManager = {
         App.notify('Режим добавления кабеля в канализации: выберите каналы', 'info');
     },
 
-    cancelAddDuctCableMode() {
+    cancelAddDuctCableMode(opts = null) {
         if (!this.addDuctCableMode) return;
         this.addDuctCableMode = false;
         this.selectedDuctCableChannels = [];
         this.map.getContainer().style.cursor = '';
+
+        try { document.getElementById('btn-add-duct-cable-map')?.classList?.remove('active'); } catch (_) {}
 
         const finishBtn = document.getElementById('btn-finish-add-mode');
         if (finishBtn) finishBtn.classList.add('hidden');
@@ -2503,6 +2531,10 @@ const MapManager = {
         if (!this.addDirectionMode && !this.addingObject && !this.addCableMode) {
             document.getElementById('add-mode-status').classList.add('hidden');
         }
+        try {
+            const o = opts || {};
+            if (o.notify !== false) App.notify('Режим добавления кабеля в канализации отменён', 'info');
+        } catch (_) {}
     },
 
     async handleDirectionClickForDuctCable(directionId) {
@@ -2564,7 +2596,7 @@ const MapManager = {
                 return;
             }
             const selected = [...this.selectedDuctCableChannels];
-            this.cancelAddDuctCableMode();
+            this.cancelAddDuctCableMode({ notify: false });
             App.showAddDuctCableModalFromMap(selected);
             return;
         }
@@ -2579,7 +2611,7 @@ const MapManager = {
         const typeCode = this.addCableTypeCode;
         const coords = [...this.selectedCablePoints];
 
-        this.cancelAddCableMode();
+        this.cancelAddCableMode({ notify: false });
 
         App.showAddCableModalFromMap(typeCode, coords);
     },
@@ -2712,6 +2744,10 @@ const MapManager = {
     startAddingObject(type) {
         this.addingObject = type;
         this.map.getContainer().style.cursor = 'crosshair';
+        try {
+            const btnId = (type === 'markers') ? 'btn-add-marker-map' : 'btn-add-well-map';
+            document.getElementById(btnId)?.classList?.add('active');
+        } catch (_) {}
         App.notify('Кликните на карте для указания местоположения', 'info');
     },
 
@@ -2722,6 +2758,10 @@ const MapManager = {
         const type = this.addingObject;
         this.addingObject = null;
         this.map.getContainer().style.cursor = '';
+        try {
+            document.getElementById('btn-add-well-map')?.classList?.remove('active');
+            document.getElementById('btn-add-marker-map')?.classList?.remove('active');
+        } catch (_) {}
         
         // Открываем модальное окно с заполненными координатами
         App.showAddObjectModal(type, latlng.lat, latlng.lng);
@@ -2733,6 +2773,11 @@ const MapManager = {
     cancelAddingObject() {
         this.addingObject = null;
         this.map.getContainer().style.cursor = '';
+        try {
+            document.getElementById('btn-add-well-map')?.classList?.remove('active');
+            document.getElementById('btn-add-marker-map')?.classList?.remove('active');
+        } catch (_) {}
+        try { App.notify('Режим добавления объекта отменён', 'info'); } catch (_) {}
     },
 
     /**
