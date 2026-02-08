@@ -672,26 +672,62 @@ class ChannelController extends BaseController
             Response::error('Направление не найдено', 404);
         }
 
-        // Если есть каналы — не даём удалить направление
-        $channels = $this->db->fetch(
-            "SELECT COUNT(*) as cnt FROM cable_channels WHERE direction_id = :id",
-            ['id' => $directionId]
-        );
-        if (!empty($channels['cnt']) && (int) $channels['cnt'] > 0) {
-            Response::error('Направление используется', 400);
-        }
-
         try {
+            // Если есть связанные каналы — можно удалить каскадно только когда каналы не используются в маршрутах кабелей
+            $channelRows = $this->db->fetchAll(
+                "SELECT id, channel_number
+                 FROM cable_channels
+                 WHERE direction_id = :id
+                 ORDER BY channel_number DESC",
+                ['id' => $directionId]
+            );
+
+            if (!empty($channelRows)) {
+                $ids = array_values(array_filter(array_map(fn($r) => (int) ($r['id'] ?? 0), $channelRows)));
+                if (!empty($ids)) {
+                    // Проверяем использование каналов кабелями
+                    $usedRow = $this->db->fetch(
+                        "SELECT COUNT(*) as cnt
+                         FROM cable_route_channels
+                         WHERE cable_channel_id IN (" . implode(',', array_map('intval', $ids)) . ")"
+                    );
+                    $usedCnt = (int) ($usedRow['cnt'] ?? 0);
+                    if ($usedCnt > 0) {
+                        Response::error('Нельзя удалить направление: в его каналах находятся кабели', 400);
+                    }
+                }
+            }
+
+            $this->db->beginTransaction();
+
+            // Удаляем каналы (с последнего), если они есть и не используются
+            if (!empty($channelRows)) {
+                foreach ($channelRows as $ch) {
+                    $cid = (int) ($ch['id'] ?? 0);
+                    if ($cid <= 0) continue;
+                    // фото канала
+                    $this->db->delete('object_photos', "object_table = 'cable_channels' AND object_id = :id", ['id' => $cid]);
+                    $this->db->delete('cable_channels', 'id = :id', ['id' => $cid]);
+                }
+            }
+
+            // фото направления
             $this->db->delete('object_photos', "object_table = 'channel_directions' AND object_id = :id", ['id' => $directionId]);
+            // направление
             $this->db->delete('channel_directions', 'id = :id', ['id' => $directionId]);
 
             $this->log('delete', 'channel_directions', $directionId, $direction, null);
 
+            $this->db->commit();
             Response::success(null, 'Направление удалено');
         } catch (\PDOException $e) {
+            try { $this->db->rollback(); } catch (\Throwable $e2) {}
             if (strpos($e->getMessage(), 'foreign key') !== false) {
                 Response::error('Нельзя удалить направление, так как оно используется', 400);
             }
+            throw $e;
+        } catch (\Throwable $e) {
+            try { $this->db->rollback(); } catch (\Throwable $e2) {}
             throw $e;
         }
     }

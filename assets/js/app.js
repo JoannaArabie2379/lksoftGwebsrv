@@ -72,7 +72,16 @@ const App = {
         document.getElementById('app').classList.remove('hidden');
 
         // Отображаем имя пользователя
-        document.getElementById('user-name').textContent = this.user.full_name || this.user.login;
+        const userNameEl = document.getElementById('user-name');
+        if (userNameEl) {
+            userNameEl.textContent = this.user.full_name || this.user.login;
+            userNameEl.style.cursor = 'pointer';
+            userNameEl.title = 'Права и доступные функции';
+            if (!this._boundUserNameClick) {
+                this._boundUserNameClick = true;
+                userNameEl.addEventListener('click', () => this.showRoleCapabilitiesModal());
+            }
+        }
 
         // Скрываем админ-панель для не-админов
         if (this.user.role.code !== 'admin') {
@@ -147,6 +156,65 @@ const App = {
             console.error('Ошибка загрузки данных карты:', error);
             this.notify('Ошибка загрузки данных карты', 'error');
         }
+    },
+
+    showRoleCapabilitiesModal() {
+        const roleCode = (this.user?.role?.code || '').toString();
+        const roleName = (this.user?.role?.name || '').toString();
+        const title = `Доступные функции (${this.escapeHtml(roleName || roleCode || 'роль')})`;
+
+        const rows = [];
+        const add = (h, items) => {
+            const list = (items || []).filter(Boolean);
+            rows.push(`
+                <div style="margin-bottom:12px;">
+                    <div style="font-weight:800; margin-bottom:6px;">${this.escapeHtml(h)}</div>
+                    <ul style="margin:0; padding-left: 18px; color: var(--text-secondary);">
+                        ${list.map(x => `<li>${this.escapeHtml(x)}</li>`).join('')}
+                    </ul>
+                </div>
+            `);
+        };
+
+        if (roleCode === 'admin') {
+            add('Администратор', [
+                'Доступны все разделы и функции системы.',
+                'Создание/редактирование/удаление объектов и справочников.',
+                'Управление пользователями и системными настройками.',
+            ]);
+        } else if (roleCode === 'readonly') {
+            add('Только чтение', [
+                'В меню доступна только “Карта”.',
+                'Доступны слои, фильтры и ссылки.',
+                'Запрещено создание/редактирование/удаление объектов, инцидентов, контрактов, отчётов, справочников, пользователей и системных настроек.',
+            ]);
+            add('Панель инструментов карты', [
+                'Подсказки (номера колодцев)',
+                'Показать координаты',
+                'Подсказки длина направления',
+                'Легенда по собственникам',
+            ]);
+        } else {
+            // user / другие роли
+            add('Пользователь', [
+                'Доступны основные функции системы (объекты/карта/инциденты/контракты/отчёты).',
+                'Разрешено создание/редактирование/удаление объектов.',
+            ]);
+            add('Ограничения', [
+                'Запрещено редактирование/удаление справочников.',
+                'Запрещено создание/удаление/редактирование пользователей.',
+                'Запрещено изменение системных настроек (Настройка данных ГИС / Настройка интерфейса карты ГИС / Настройка слоя WMTS).',
+                'Разрешены персонализированные настройки.',
+            ]);
+        }
+
+        const content = `
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                ${rows.join('')}
+            </div>
+        `;
+        const footer = `<button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>`;
+        this.showModal(title, content, footer);
     },
 
     async loadSettings() {
@@ -4466,8 +4534,18 @@ const App = {
             duct_cable: (id) => API.cables.delete('duct', id),
         };
 
+        // Порядок удаления при множественном выделении:
+        // 1) каналы (cable_channel) 2) направления 3) колодцы
+        const rank = (t) => {
+            if (t === 'cable_channel') return 1;
+            if (t === 'channel_direction') return 2;
+            if (t === 'well') return 3;
+            return 100;
+        };
+        const ordered = (list || []).slice().sort((a, b) => rank(a?.objectType) - rank(b?.objectType));
+
         const results = { ok: 0, failed: 0 };
-        for (const item of list) {
+        for (const item of ordered) {
             const type = item?.objectType;
             const id = item?.properties?.id;
             const fn = deleteFnByType[type];
