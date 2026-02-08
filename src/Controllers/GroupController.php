@@ -43,7 +43,12 @@ class GroupController extends BaseController
         if ($where) {
             $sql .= " WHERE {$where}";
         }
-        $sql .= " ORDER BY g.name LIMIT :limit OFFSET :offset";
+        $orderBy = $this->getOrderBy([
+            'number' => 'g.number',
+            'name' => 'g.name',
+            'created_at' => 'g.created_at',
+        ], 'g.name');
+        $sql .= " ORDER BY {$orderBy} LIMIT :limit OFFSET :offset";
         
         $params['limit'] = $pagination['limit'];
         $params['offset'] = $pagination['offset'];

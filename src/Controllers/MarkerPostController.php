@@ -50,7 +50,11 @@ class MarkerPostController extends BaseController
         if ($where) {
             $sql .= " WHERE {$where}";
         }
-        $sql .= " ORDER BY mp.number LIMIT :limit OFFSET :offset";
+        $orderBy = $this->getOrderBy([
+            'number' => 'mp.number',
+            'created_at' => 'mp.created_at',
+        ], 'mp.number');
+        $sql .= " ORDER BY {$orderBy} LIMIT :limit OFFSET :offset";
         
         $params['limit'] = $pagination['limit'];
         $params['offset'] = $pagination['offset'];
@@ -271,9 +275,8 @@ class MarkerPostController extends BaseController
             Response::error('Столбик не найден', 404);
         }
 
-        // number не редактируется
         $data = $this->request->only([
-            'owner_id', 'type_id', 'kind_id', 'status_id',
+            'number', 'owner_id', 'type_id', 'kind_id', 'status_id',
             'height_m', 'material', 'installation_date', 'notes'
         ]);
         $data = array_filter($data, fn($v) => $v !== null);

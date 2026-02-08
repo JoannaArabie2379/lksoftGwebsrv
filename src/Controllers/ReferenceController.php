@@ -148,7 +148,7 @@ class ReferenceController extends BaseController
      */
     public function store(string $type): void
     {
-        $this->checkWriteAccess();
+        $this->checkAdminAccess();
         $config = $this->getConfig($type);
 
         $data = $this->request->only($config['fields']);
@@ -212,7 +212,7 @@ class ReferenceController extends BaseController
      */
     public function update(string $type, string $id): void
     {
-        $this->checkWriteAccess();
+        $this->checkAdminAccess();
         $config = $this->getConfig($type);
         $recordId = (int) $id;
 
@@ -269,7 +269,7 @@ class ReferenceController extends BaseController
      */
     public function destroy(string $type, string $id): void
     {
-        $this->checkDeleteAccess();
+        $this->checkAdminAccess();
         $config = $this->getConfig($type);
         $recordId = (int) $id;
 

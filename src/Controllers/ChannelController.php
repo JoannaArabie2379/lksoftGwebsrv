@@ -57,7 +57,12 @@ class ChannelController extends BaseController
         if ($where) {
             $sql .= " WHERE {$where}";
         }
-        $sql .= " ORDER BY cd.number LIMIT :limit OFFSET :offset";
+        $orderBy = $this->getOrderBy([
+            'number' => 'cd.number',
+            'created_at' => 'cd.created_at',
+            'length' => 'cd.length_m',
+        ], 'cd.number');
+        $sql .= " ORDER BY {$orderBy} LIMIT :limit OFFSET :offset";
         
         $params['limit'] = $pagination['limit'];
         $params['offset'] = $pagination['offset'];
@@ -65,6 +70,37 @@ class ChannelController extends BaseController
         $data = $this->db->fetchAll($sql, $params);
 
         Response::paginated($data, $total, $pagination['page'], $pagination['limit']);
+    }
+
+    /**
+     * GET /api/channel-directions/stats
+     * Итоги по направлениям (кол-во и сумма протяженности)
+     */
+    public function stats(): void
+    {
+        $filters = $this->buildFilters([
+            'owner_id' => 'cd.owner_id',
+            'type_id' => 'cd.type_id',
+            'start_well_id' => 'cd.start_well_id',
+            'end_well_id' => 'cd.end_well_id',
+            '_search' => ['cd.number', 'cd.notes'],
+        ]);
+
+        $where = $filters['where'];
+        $params = $filters['params'];
+
+        $sql = "SELECT COUNT(*) as cnt, COALESCE(SUM(cd.length_m), 0) as length_sum
+                FROM channel_directions cd";
+        if ($where) {
+            $sql .= " WHERE {$where}";
+        }
+
+        $row = $this->db->fetch($sql, $params) ?: ['cnt' => 0, 'length_sum' => 0];
+
+        Response::success([
+            'count' => (int) ($row['cnt'] ?? 0),
+            'length_sum' => (float) ($row['length_sum'] ?? 0),
+        ]);
     }
 
     /**
@@ -441,7 +477,12 @@ class ChannelController extends BaseController
         if ($where) {
             $sql .= " WHERE {$where}";
         }
-        $sql .= " ORDER BY cd.number, cc.channel_number LIMIT :limit OFFSET :offset";
+        $orderBy = $this->getOrderBy([
+            'number' => 'cc.channel_number',
+            'created_at' => 'cc.created_at',
+            'direction_number' => 'cd.number',
+        ], 'cd.number, cc.channel_number');
+        $sql .= " ORDER BY {$orderBy} LIMIT :limit OFFSET :offset";
         
         $params['limit'] = $pagination['limit'];
         $params['offset'] = $pagination['offset'];

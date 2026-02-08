@@ -177,11 +177,13 @@ $router->get('/api/wells/export', [WellController::class, 'export'], ['auth']);
 $router->get('/api/wells/{id}', [WellController::class, 'show'], ['auth']);
 $router->post('/api/wells', [WellController::class, 'store'], ['auth']);
 $router->put('/api/wells/{id}', [WellController::class, 'update'], ['auth']);
+$router->post('/api/wells/{id}/dismantle', [WellController::class, 'dismantle'], ['auth']);
 $router->delete('/api/wells/{id}', [WellController::class, 'destroy'], ['auth']);
 
 // Направления каналов
 $router->get('/api/channel-directions', [ChannelController::class, 'index'], ['auth']);
 $router->get('/api/channel-directions/geojson', [ChannelController::class, 'geojson'], ['auth']);
+$router->get('/api/channel-directions/stats', [ChannelController::class, 'stats'], ['auth']);
 $router->get('/api/channel-directions/{id}', [ChannelController::class, 'show'], ['auth']);
 $router->post('/api/channel-directions', [ChannelController::class, 'store'], ['auth']);
 $router->put('/api/channel-directions/{id}', [ChannelController::class, 'update'], ['auth']);

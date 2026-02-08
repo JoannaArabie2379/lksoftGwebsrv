@@ -62,7 +62,12 @@ class UnifiedCableController extends BaseController
         if ($where) {
             $sql .= " WHERE {$where}";
         }
-        $sql .= " ORDER BY c.number LIMIT :limit OFFSET :offset";
+        $orderBy = $this->getOrderBy([
+            'number' => 'c.number',
+            'created_at' => 'c.created_at',
+            'length' => 'c.length_calculated',
+        ], 'c.number');
+        $sql .= " ORDER BY {$orderBy} LIMIT :limit OFFSET :offset";
         
         $params['limit'] = $pagination['limit'];
         $params['offset'] = $pagination['offset'];
@@ -442,8 +447,7 @@ class UnifiedCableController extends BaseController
         }
 
         $data = $this->request->only([
-            // number не редактируется
-            'cable_catalog_id', 'cable_type_id', 'owner_id',
+            'number', 'cable_catalog_id', 'cable_type_id', 'owner_id',
             'status_id', 'contract_id', 'length_declared', 'installation_date', 'notes'
         ]);
         $data = array_filter($data, fn($v) => $v !== null);

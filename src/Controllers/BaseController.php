@@ -92,6 +92,22 @@ abstract class BaseController
     }
 
     /**
+     * Безопасная сортировка по whitelist колонок
+     */
+    protected function getOrderBy(array $allowed, string $default): string
+    {
+        $orderBy = $this->request->query('order_by');
+        $dir = strtolower((string) $this->request->query('order_dir', 'asc'));
+        $dir = $dir === 'desc' ? 'DESC' : 'ASC';
+
+        if ($orderBy && isset($allowed[$orderBy])) {
+            return $allowed[$orderBy] . ' ' . $dir;
+        }
+
+        return $default;
+    }
+
+    /**
      * Построить WHERE условие из фильтров
      */
     protected function buildFilters(array $allowedFilters): array
@@ -139,6 +155,16 @@ abstract class BaseController
     {
         if (!Auth::canDelete()) {
             Response::error('Недостаточно прав для удаления', 403);
+        }
+    }
+
+    /**
+     * Проверка доступа только для администратора
+     */
+    protected function checkAdminAccess(): void
+    {
+        if (!Auth::isAdmin()) {
+            Response::error('Доступ запрещён', 403);
         }
     }
 
