@@ -117,7 +117,14 @@ const App = {
             });
             // Инструменты карты: отключаем всё кроме разрешённых
             try {
-                const allowed = new Set(['btn-toggle-well-labels', 'btn-toggle-object-coordinates', 'btn-toggle-direction-length-labels', 'btn-toggle-owner-legend']);
+                const allowed = new Set([
+                    'btn-toggle-well-labels',
+                    'btn-toggle-object-coordinates',
+                    'btn-toggle-direction-length-labels',
+                    'btn-toggle-owner-legend',
+                    // безопасная операция (не меняет данные) — разрешаем всем
+                    'btn-refresh-map',
+                ]);
                 document.querySelectorAll('#map-toolbar button').forEach((btn) => {
                     if (!btn?.id) return;
                     if (allowed.has(btn.id)) return;
@@ -822,6 +829,14 @@ const App = {
         });
         document.getElementById('btn-tu-mode')?.addEventListener('click', () => {
             this.openTuModeModal().catch(() => {});
+        });
+        document.getElementById('btn-refresh-map')?.addEventListener('click', async () => {
+            try {
+                await MapManager.refreshMapPreserveView?.();
+                this.notify('Карта обновлена', 'success');
+            } catch (e) {
+                this.notify(e?.message || 'Не удалось обновить карту', 'error');
+            }
         });
         document.getElementById('btn-cancel-add-mode')?.addEventListener('click', () => {
             MapManager.cancelAddDirectionMode();

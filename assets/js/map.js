@@ -780,6 +780,33 @@ const MapManager = {
     },
 
     /**
+     * Обновить карту (перезагрузить слои), сохранив текущий центр/зум.
+     * Требование: без изменения фокуса и зума.
+     */
+    async refreshMapPreserveView() {
+        const curCenter = this.map ? this.map.getCenter() : null;
+        const curZoom = this.map ? this.map.getZoom() : null;
+
+        try {
+            if (this.groupMode && this.activeGroupId) {
+                await this.loadGroup(this.activeGroupId, this._lastGroupFilters || {});
+            } else {
+                await this.loadAllLayers();
+            }
+        } finally {
+            try {
+                if (this.map && curCenter && typeof curZoom === 'number') {
+                    this.map.setView(curCenter, curZoom, { animate: false });
+                }
+            } catch (_) {}
+            try {
+                // Подстраховка: если изменился размер контейнера/DOM
+                this.map?.invalidateSize?.({ pan: false, animate: false });
+            } catch (_) {}
+        }
+    },
+
+    /**
      * Загрузка колодцев
      */
     async loadWells() {
