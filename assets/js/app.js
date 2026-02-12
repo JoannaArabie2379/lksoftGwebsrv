@@ -5081,17 +5081,13 @@ const App = {
         }
     },
 
-    _uniqueIdsPreserveOrder(ids) {
-        const out = [];
-        const seen = new Set();
-        (ids || []).forEach((x) => {
-            const n = parseInt(x, 10);
-            if (!n) return;
-            if (seen.has(n)) return;
-            seen.add(n);
-            out.push(n);
-        });
-        return out;
+    _normalizeRouteChannelIdsPreserveOrder(ids) {
+        // Важно: не удаляем дубликаты.
+        // Маршрут может требовать повторного прохождения одного и того же канала,
+        // чтобы трасса гарантированно проходила через все выбранные пользователем колодцы.
+        return (ids || [])
+            .map((x) => parseInt(x, 10))
+            .filter((n) => Number.isFinite(n) && n > 0);
     },
 
     async pickChannelsForShortestPathDirections(dirs) {
@@ -5135,7 +5131,7 @@ const App = {
             if (!picked) return null; // cancelled
             selected.push(parseInt(picked, 10));
         }
-        return this._uniqueIdsPreserveOrder(selected);
+        return this._normalizeRouteChannelIdsPreserveOrder(selected);
     },
 
     async createDuctCableFromShortestPath() {
@@ -5196,7 +5192,7 @@ const App = {
             const existing = Array.isArray(MapManager?.shortestDuctCableRouteChannelIds)
                 ? MapManager.shortestDuctCableRouteChannelIds
                 : [];
-            const newRoute = this._uniqueIdsPreserveOrder([...(existing || []), ...(segmentChannelIds || [])]);
+            const newRoute = this._normalizeRouteChannelIdsPreserveOrder([...(existing || []), ...(segmentChannelIds || [])]);
 
             const upd = await API.unifiedCables.update(cid, { route_channels: newRoute });
             if (upd?.success === false) throw new Error(upd?.message || 'Ошибка обновления кабеля');
