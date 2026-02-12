@@ -1448,13 +1448,13 @@ const MapManager = {
                     try { App.previewShortestDuctCablePath?.(this.shortestDuctCableStartWell, this.shortestDuctCableEndWell); } catch (_) {}
                     return;
                 }
-            // Если конечный колодец уже выбран, но кабель ещё не создан — меняем конечный колодец и пересчитываем путь
-            if (wid === this.shortestDuctCableStartWell.id) {
-                App.notify('Конечный колодец должен отличаться от начального', 'warning');
-                return;
+            // Если конечный колодец уже выбран, но кабель ещё не создан — НЕ пересчитываем "от первого до нового".
+            // Фиксируем текущий сегмент (Start->End), добавляем его в планируемый маршрут и считаем следующий сегмент (End->Next),
+            // исключая уже использованные направления/каналы.
+            try {
+                Promise.resolve(App.appendShortestDuctCablePlannedSegmentAndPreviewNext?.({ id: wid, number: num }))
+            } catch (_) {
             }
-            this.shortestDuctCableEndWell = { id: wid, number: num };
-            try { App.previewShortestDuctCablePath?.(this.shortestDuctCableStartWell, this.shortestDuctCableEndWell); } catch (_) {}
             };
 
             if (wellHits.length <= 1) {
@@ -1850,12 +1850,13 @@ const MapManager = {
                 try { App.previewShortestDuctCablePath?.(this.shortestDuctCableStartWell, this.shortestDuctCableEndWell); } catch (_) {}
                 return;
             }
-            if (wid === this.shortestDuctCableStartWell.id) {
-                App.notify('Конечный колодец должен отличаться от начального', 'warning');
-                return;
+            // Если конечный колодец уже выбран, но кабель ещё не создан — НЕ пересчитываем "от первого до нового".
+            // Фиксируем текущий сегмент (Start->End), добавляем его в планируемый маршрут и считаем следующий сегмент (End->Next),
+            // исключая уже использованные направления/каналы.
+            try {
+                Promise.resolve(App.appendShortestDuctCablePlannedSegmentAndPreviewNext?.({ id: wid, number: num }))
+            } catch (_) {
             }
-            this.shortestDuctCableEndWell = { id: wid, number: num };
-            try { App.previewShortestDuctCablePath?.(this.shortestDuctCableStartWell, this.shortestDuctCableEndWell); } catch (_) {}
         } catch (_) {}
     },
 
