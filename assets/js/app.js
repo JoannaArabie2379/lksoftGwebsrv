@@ -5077,7 +5077,13 @@ const App = {
             // Неблокирующее окно: сверху-справа, без затемнения карты
             this.showModal('Кабель в канализации по кратчайшему пути', content, footer, { nonBlocking: true, position: 'top-right' });
         } catch (e) {
-            this.notify(e?.message || 'Не удалось рассчитать путь', 'error');
+            const msg = (e?.message || '').toString();
+            if (/путь не найден/i.test(msg)) {
+                this.notify('Выбранный объект недостижим', 'warning');
+                try { MapManager.clearHighlight?.(); } catch (_) {}
+                return;
+            }
+            this.notify(msg || 'Не удалось рассчитать путь', 'error');
         }
     },
 
@@ -5249,7 +5255,12 @@ const App = {
             this.notify('Выберите следующий колодец для продолжения (или выключите режим)', 'info');
         } catch (e) {
             try { MapManager.shortestDuctCableEndWell = null; } catch (_) {}
-            this.notify(e?.message || 'Не удалось достроить кабель', 'error');
+            const msg = (e?.message || '').toString();
+            if (/путь не найден/i.test(msg)) {
+                this.notify('Выбранный объект недостижим', 'warning');
+                return;
+            }
+            this.notify(msg || 'Не удалось достроить кабель', 'error');
         }
     },
 
@@ -6308,6 +6319,16 @@ const App = {
                                 MapManager.shortestDuctCableEndWell = null;
                                 this._shortestDuctCableCreateRouteChannelIds = null;
                                 this._shortestDuctCableCreateRouteDirectionIds = null;
+                                // Приводим состояние режима к фактическому маршруту в БД (если пользователь менял маршрут в форме)
+                                try {
+                                    const r = await API.unifiedCables.get(idNum);
+                                    const c = r?.data || r || {};
+                                    const rcs = Array.isArray(c.route_channels) ? c.route_channels : [];
+                                    const chIds = rcs.map(x => parseInt(x?.cable_channel_id || 0, 10)).filter(n => n > 0);
+                                    const dirIds = rcs.map(x => parseInt(x?.direction_id || 0, 10)).filter(n => n > 0);
+                                    if (chIds.length) MapManager.shortestDuctCableRouteChannelIds = this._uniqueIdsPreserveOrder(chIds);
+                                    if (dirIds.length) MapManager.shortestDuctCableRouteDirectionIds = this._uniqueIdsPreserveOrder(dirIds);
+                                } catch (_) {}
                                 // подсветим текущий маршрут кабеля без изменения зума/фокуса
                                 setTimeout(async () => {
                                     try {
