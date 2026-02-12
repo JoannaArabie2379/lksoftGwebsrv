@@ -439,6 +439,13 @@ class UnifiedCableController extends BaseController
                 
                 // Добавляем каналы маршрута
                 $routeChannels = $this->request->input('route_channels', []);
+                if (!is_array($routeChannels)) {
+                    Response::error('Некорректный маршрут каналов', 422);
+                }
+                $routeChannels = array_values(array_filter(array_map('intval', $routeChannels), fn($v) => $v > 0));
+                if (count($routeChannels) !== count(array_unique($routeChannels))) {
+                    Response::error('Маршрут кабеля не может содержать повтор одного и того же канала', 422);
+                }
                 foreach ($routeChannels as $order => $channelId) {
                     $this->db->insert('cable_route_channels', [
                         'cable_id' => $id,
@@ -602,6 +609,13 @@ class UnifiedCableController extends BaseController
                 $routeWells = $this->request->input('route_wells');
                 $routeChannels = $this->request->input('route_channels');
                 if ($routeChannels !== null) {
+                    if (!is_array($routeChannels)) {
+                        Response::error('Некорректный маршрут каналов', 422);
+                    }
+                    $routeChannels = array_values(array_filter(array_map('intval', $routeChannels), fn($v) => $v > 0));
+                    if (count($routeChannels) !== count(array_unique($routeChannels))) {
+                        Response::error('Маршрут кабеля не может содержать повтор одного и того же канала', 422);
+                    }
                     $this->db->delete('cable_route_channels', 'cable_id = :id', ['id' => $cableId]);
                     foreach ($routeChannels as $order => $channelId) {
                         $this->db->insert('cable_route_channels', [

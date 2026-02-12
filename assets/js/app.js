@@ -5081,13 +5081,17 @@ const App = {
         }
     },
 
-    _normalizeRouteChannelIdsPreserveOrder(ids) {
-        // Важно: не удаляем дубликаты.
-        // Маршрут может требовать повторного прохождения одного и того же канала,
-        // чтобы трасса гарантированно проходила через все выбранные пользователем колодцы.
-        return (ids || [])
-            .map((x) => parseInt(x, 10))
-            .filter((n) => Number.isFinite(n) && n > 0);
+    _uniqueIdsPreserveOrder(ids) {
+        const out = [];
+        const seen = new Set();
+        (ids || []).forEach((x) => {
+            const n = parseInt(x, 10);
+            if (!n) return;
+            if (seen.has(n)) return;
+            seen.add(n);
+            out.push(n);
+        });
+        return out;
     },
 
     async pickChannelsForShortestPathDirections(dirs) {
@@ -5131,7 +5135,7 @@ const App = {
             if (!picked) return null; // cancelled
             selected.push(parseInt(picked, 10));
         }
-        return this._normalizeRouteChannelIdsPreserveOrder(selected);
+        return this._uniqueIdsPreserveOrder(selected);
     },
 
     async createDuctCableFromShortestPath() {
@@ -5145,13 +5149,15 @@ const App = {
 
         const selected = await this.pickChannelsForShortestPathDirections(dirs);
         if (!selected || !selected.length) return;
+        // Страховка: маршрут не должен содержать повтор канала
+        const selectedU = this._uniqueIdsPreserveOrder(selected);
 
         this.hideModal();
         this._shortestDuctCablePath = null;
         this._resolveShortestChannelPick = null;
         // Запоминаем маршрут, чтобы после создания кабеля продолжать достраивать его по следующим колодцам
-        this._shortestDuctCableCreateRouteChannelIds = selected.slice();
-        await this.showAddDuctCableModalFromMap(selected);
+        this._shortestDuctCableCreateRouteChannelIds = selectedU.slice();
+        await this.showAddDuctCableModalFromMap(selectedU);
     },
 
     async extendShortestDuctCableToWell(cableId, startWell, endWell) {
@@ -5192,7 +5198,23 @@ const App = {
             const existing = Array.isArray(MapManager?.shortestDuctCableRouteChannelIds)
                 ? MapManager.shortestDuctCableRouteChannelIds
                 : [];
-            const newRoute = this._normalizeRouteChannelIdsPreserveOrder([...(existing || []), ...(segmentChannelIds || [])]);
+            const existingU = this._uniqueIdsPreserveOrder(existing || []);
+            const segmentU = this._uniqueIdsPreserveOrder(segmentChannelIds || []);
+            const used = new Set(existingU);
+            const conflicts = segmentU.filter((id) => used.has(id));
+            if (conflicts.length) {
+                // Нельзя использовать один и тот же канал дважды (UNIQUE в БД).
+                // Значит выбранный колодец недостижим с учётом уже выбранного маршрута.
+                try { MapManager.shortestDuctCableEndWell = null; } catch (_) {}
+                try {
+                    // вернём подсветку на текущий маршрут кабеля (если получится)
+                    const fc = await API.unifiedCables.routeDirectionsGeojson(cid);
+                    if (fc && fc.type === 'FeatureCollection') MapManager.highlightFeatureCollection(fc);
+                } catch (_) {}
+                this.notify('Выбранный колодец недостижим: маршрут требует повторного использования уже выбранного канала', 'warning');
+                return;
+            }
+            const newRoute = [...existingU, ...segmentU];
 
             const upd = await API.unifiedCables.update(cid, { route_channels: newRoute });
             if (upd?.success === false) throw new Error(upd?.message || 'Ошибка обновления кабеля');
