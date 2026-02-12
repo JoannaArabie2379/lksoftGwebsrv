@@ -388,7 +388,10 @@ class ChannelController extends BaseController
         }
 
         if (empty($adj[$start]) || empty($adj[$end])) {
-            Response::error('Путь не найден', 404);
+            // В UI "Путь не найден" — ожидаемая ситуация (особенно в режиме легенды).
+            // Возвращаем 200, чтобы не засорять консоль браузера ошибками fetch (404),
+            // но сохраняем success=false для обработки на клиенте.
+            Response::error('Путь не найден', 200);
         }
 
         $dist = [];
@@ -421,7 +424,7 @@ class ChannelController extends BaseController
         }
 
         if (!isset($dist[$end]) || !isset($prev[$end])) {
-            Response::error('Путь не найден', 404);
+            Response::error('Путь не найден', 200);
         }
 
         // reconstruct direction ids
@@ -436,7 +439,7 @@ class ChannelController extends BaseController
         }
         $directionIds = array_values(array_filter(array_reverse($directionIdsRev), fn($v) => $v > 0));
         if (!$directionIds) {
-            Response::error('Путь не найден', 404);
+            Response::error('Путь не найден', 200);
         }
 
         // direction details
