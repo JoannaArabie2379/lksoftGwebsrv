@@ -491,6 +491,7 @@ const App = {
         document.getElementById('btn-find-clones')?.addEventListener('click', () => this.findWellClones());
         document.getElementById('btn-import').addEventListener('click', () => this.showImportModal());
         document.getElementById('btn-export').addEventListener('click', () => this.exportObjects());
+        document.getElementById('btn-recalc-cable-lengths')?.addEventListener('click', () => this.recalculateCableLengths());
         document.getElementById('btn-delete-selected')?.addEventListener('click', () => this.deleteSelectedObjects());
         document.getElementById('objects-filter-owner')?.addEventListener('change', () => {
             this.pagination.page = 1;
@@ -1280,6 +1281,8 @@ const App = {
         if (importBtn) {
             importBtn.classList.toggle('hidden', tab !== 'wells' || !this.canWrite());
         }
+        // Кнопка "Пересчитать длины" — только для вкладки "Кабели"
+        document.getElementById('btn-recalc-cable-lengths')?.classList.toggle('hidden', tab !== 'unified_cables' || !this.canWrite());
         // Кнопка "Найти клоны" — только для "Колодцы"
         document.getElementById('btn-find-clones')?.classList.toggle('hidden', tab !== 'wells');
 
@@ -1380,6 +1383,33 @@ const App = {
             this.showModal('Найти клоны: колодцы (WGS84)', content, footer);
         } catch (e) {
             this.notify(e?.message || 'Ошибка поиска клонов', 'error');
+        }
+    },
+
+    async recalculateCableLengths() {
+        if (!this.canWrite()) {
+            this.notify('Недостаточно прав', 'error');
+            return;
+        }
+        if (this.currentTab !== 'unified_cables') {
+            this.switchTab('unified_cables');
+        }
+        if (!confirm('Пересчитать длины всех кабелей в канализации по маршрутам?')) return;
+        try {
+            this.notify('Пересчёт длины кабелей...', 'info');
+            const resp = await API.unifiedCables.recalculateLengths();
+            if (resp?.success === false) {
+                this.notify(resp?.message || 'Ошибка пересчёта', 'error');
+                return;
+            }
+            const meta = resp?.data || resp || {};
+            const cnt = meta?.cables_total ?? meta?.updated ?? null;
+            this.notify(`Длины пересчитаны${cnt !== null ? ` (кабелей: ${cnt})` : ''}`, 'success');
+            // Обновим список и суммы
+            this.loadObjects();
+            try { MapManager.loadAllLayers?.(); } catch (_) {}
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка пересчёта', 'error');
         }
     },
 
@@ -5416,11 +5446,12 @@ const App = {
         // Загружаем справочники (кеш)
         if (!this._mapDefaultsCache) {
             try {
-                const [objectTypesResp, objectKindsResp, statusesResp, ownersResp, cableTypesResp, cableCatalogResp] = await Promise.all([
+                const [objectTypesResp, objectKindsResp, statusesResp, ownersResp, contractsResp, cableTypesResp, cableCatalogResp] = await Promise.all([
                     API.references.all('object_types'),
                     API.references.all('object_kinds'),
                     API.references.all('object_status'),
                     API.references.all('owners'),
+                    API.references.all('contracts'),
                     API.references.all('cable_types'),
                     API.references.all('cable_catalog'),
                 ]);
@@ -5429,15 +5460,16 @@ const App = {
                     objectKinds: objectKindsResp?.data || [],
                     statuses: statusesResp?.data || [],
                     owners: ownersResp?.data || [],
+                    contracts: contractsResp?.data || [],
                     cableTypes: cableTypesResp?.data || [],
                     cableCatalog: cableCatalogResp?.data || [],
                 };
             } catch (_) {
-                this._mapDefaultsCache = { objectTypes: [], objectKinds: [], statuses: [], owners: [], cableTypes: [], cableCatalog: [] };
+                this._mapDefaultsCache = { objectTypes: [], objectKinds: [], statuses: [], owners: [], contracts: [], cableTypes: [], cableCatalog: [] };
             }
         }
 
-        const { objectTypes, objectKinds, statuses, owners, cableTypes, cableCatalog } = this._mapDefaultsCache;
+        const { objectTypes, objectKinds, statuses, owners, contracts, cableTypes, cableCatalog } = this._mapDefaultsCache;
 
         const getDefaultByIsDefault = (arr) => (arr || []).find(x => !!x.is_default)?.id || '';
         const getCurrent = (key, fallbackId) => {
@@ -5524,6 +5556,7 @@ const App = {
 
         const curStatus = getCurrent('default_status_id', getDefaultByIsDefault(statuses));
         const curOwner = getCurrent('default_owner_id', getDefaultByIsDefault(owners));
+        const curContract = getCurrent('default_contract_id', '');
         const curCableCatalog = getCurrent('default_cable_catalog_id', getDefaultByIsDefault(cableCatalog));
 
         el.innerHTML = `
@@ -5536,6 +5569,10 @@ const App = {
             <div class="form-group">
                 <label>Собственник</label>
                 <select id="md-owner">${options(owners, curOwner, x => x.name || x.code || x.id)}</select>
+            </div>
+            <div class="form-group">
+                <label>Контракт</label>
+                <select id="md-contract">${options(contracts, curContract, x => (x.number ? `${x.number} — ${x.name || ''}` : (x.name || x.id)))}</select>
             </div>
             <div class="form-group">
                 <label>Кабель</label>
@@ -5580,6 +5617,7 @@ const App = {
 
         bindSave('md-status', 'default_status_id');
         bindSave('md-owner', 'default_owner_id');
+        bindSave('md-contract', 'default_contract_id');
         bindSave('md-cable-catalog', 'default_cable_catalog_id');
     },
 
@@ -5848,6 +5886,12 @@ const App = {
                     <div class="form-group">
                         <label>Собственник *</label>
                         <select name="owner_id" required id="modal-owner-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Контракт</label>
+                        <select name="contract_id" id="modal-contract-select">
+                            <option value="">Не указан</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label>Состояние</label>
@@ -6158,7 +6202,8 @@ const App = {
                 if (cResp?.success) {
                     contractSelect.innerHTML = '<option value="">Не указан</option>' +
                         cResp.data.map(c => `<option value="${c.id}" data-is-default="${c.is_default ? 1 : 0}">${c.number} — ${c.name}</option>`).join('');
-                    pickDefault(contractSelect);
+                    const udef = this.settings?.default_contract_id || '';
+                    if (!pickUserDefault(contractSelect, udef, { forceIfDefault: true })) pickDefault(contractSelect);
                 }
             }
 
@@ -6414,42 +6459,19 @@ const App = {
                             Array.isArray(this._shortestDuctCableCreateRouteChannelIds) &&
                             this._shortestDuctCableCreateRouteChannelIds.length
                         ) {
-                            const createdId = response?.data?.id || response?.id;
-                            const idNum = createdId ? parseInt(createdId, 10) : 0;
-                            if (idNum > 0) {
-                                MapManager.shortestDuctCableCableId = idNum;
-                                MapManager.shortestDuctCableRouteChannelIds = (this._shortestDuctCableCreateRouteChannelIds || []).slice();
-                                MapManager.shortestDuctCableRouteDirectionIds = Array.isArray(this._shortestDuctCableCreateRouteDirectionIds)
-                                    ? this._shortestDuctCableCreateRouteDirectionIds.slice()
-                                    : [];
-                                // продолжение от конечного колодца
-                                if (MapManager.shortestDuctCableEndWell?.id) {
-                                    MapManager.shortestDuctCableStartWell = { ...MapManager.shortestDuctCableEndWell };
+                            // По требованию: после создания кабеля очищаем состояние и выходим из режима,
+                            // чтобы не подтягивались данные прошлого построения.
+                            this._shortestDuctCableCreateRouteChannelIds = null;
+                            this._shortestDuctCableCreateRouteDirectionIds = null;
+                            this._shortestDuctCablePath = null;
+                            this._prefillCableRouteChannelIds = [];
+                            this._resolveShortestChannelPick = null;
+                            try {
+                                if (MapManager?.shortestDuctCableMode && typeof MapManager.toggleShortestDuctCableMode === 'function') {
+                                    MapManager.toggleShortestDuctCableMode();
                                 }
-                                MapManager.shortestDuctCableEndWell = null;
-                                this._shortestDuctCableCreateRouteChannelIds = null;
-                                this._shortestDuctCableCreateRouteDirectionIds = null;
-                                // Приводим состояние режима к фактическому маршруту в БД (если пользователь менял маршрут в форме)
-                                try {
-                                    const r = await API.unifiedCables.get(idNum);
-                                    const c = r?.data || r || {};
-                                    const rcs = Array.isArray(c.route_channels) ? c.route_channels : [];
-                                    const chIds = rcs.map(x => parseInt(x?.cable_channel_id || 0, 10)).filter(n => n > 0);
-                                    const dirIds = rcs.map(x => parseInt(x?.direction_id || 0, 10)).filter(n => n > 0);
-                                    if (chIds.length) MapManager.shortestDuctCableRouteChannelIds = this._uniqueIdsPreserveOrder(chIds);
-                                    if (dirIds.length) MapManager.shortestDuctCableRouteDirectionIds = this._uniqueIdsPreserveOrder(dirIds);
-                                } catch (_) {}
-                                // подсветим текущий маршрут кабеля без изменения зума/фокуса
-                                setTimeout(async () => {
-                                    try {
-                                        const fc = await API.unifiedCables.routeDirectionsGeojson(idNum);
-                                        if (fc && fc.type === 'FeatureCollection') {
-                                            MapManager.highlightFeatureCollection(fc);
-                                        }
-                                    } catch (_) {}
-                                }, 250);
-                                this.notify('Кабель создан. Выберите следующий колодец для продолжения (или выключите режим).', 'info');
-                            }
+                            } catch (_) {}
+                            this.notify('Кабель создан. Режим кратчайшего пути выключен.', 'info');
                         }
                     }
                 } catch (_) {}

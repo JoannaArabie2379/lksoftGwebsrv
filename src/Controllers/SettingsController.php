@@ -46,6 +46,7 @@ class SettingsController extends BaseController
             'default_kind_id_marker' => '',
             'default_status_id' => '',
             'default_owner_id' => '',
+            'default_contract_id' => '',
             'default_cable_type_id' => '',
             'default_cable_catalog_id' => '',
             'well_entry_point_kind_code' => 'input',
@@ -153,6 +154,7 @@ class SettingsController extends BaseController
             'default_kind_id_marker',
             'default_status_id',
             'default_owner_id',
+            'default_contract_id',
             'default_cable_type_id',
             'default_cable_catalog_id',
             // Hotkeys: Alt + <символ> для инструментов карты
@@ -181,6 +183,7 @@ class SettingsController extends BaseController
             'default_kind_id_marker',
             'default_status_id',
             'default_owner_id',
+            'default_contract_id',
             'default_cable_type_id',
             'default_cable_catalog_id',
             'hotkey_add_direction',
