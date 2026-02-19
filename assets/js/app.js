@@ -402,16 +402,6 @@ const App = {
             input.addEventListener('change', () => this.handleLayerToggle(input));
         });
 
-        // Слои: подсказки "неучтенные" для инвентаризации
-        document.getElementById('btn-inventory-unacc-labels')?.addEventListener('click', (e) => {
-            try { e.preventDefault(); } catch (_) {}
-            try { e.stopPropagation(); } catch (_) {}
-            try {
-                MapManager.toggleInventoryUnaccountedLabels?.();
-                const btn = document.getElementById('btn-inventory-unacc-labels');
-                if (btn) btn.classList.toggle('active', !!MapManager.inventoryUnaccountedLabelsEnabled);
-            } catch (_) {}
-        });
         // Слои карты: подсказки инвентаризации (неучтенные)
         document.getElementById('btn-inventory-unacc-labels')?.addEventListener('click', (e) => {
             try {

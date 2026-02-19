@@ -455,6 +455,14 @@ a:hover {
     accent-color: var(--accent-color);
 }
 
+.layer-item .layer-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .layer-icon {
     width: 12px;
     height: 12px;
@@ -463,6 +471,7 @@ a:hover {
 
 .layer-inline-btn {
     margin-left: auto;
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
