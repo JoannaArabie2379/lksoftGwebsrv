@@ -705,8 +705,16 @@ const MapManager = {
 
             const inputMarkerFor = (directionId, latlng) => {
                 const safeId = String(directionId);
+                let label = '';
+                try {
+                    const meta = this._inventoryDirectionsCache?.get?.(directionId) || null;
+                    label = (meta?.number || meta?.id || '').toString();
+                } catch (_) {
+                    label = '';
+                }
                 const html = `
                     <div style="background: rgba(255,255,255,0.85); padding:4px 6px; border-radius:8px; border:1px solid rgba(0,0,0,0.25); box-shadow: 0 2px 6px rgba(0,0,0,0.25);">
+                        ${label ? `<div style="font-size:11px; font-weight:700; color:#111; margin-bottom:2px; text-align:center; white-space:nowrap;">${label}</div>` : ``}
                         <input type="number" data-direction-id="${safeId}" min="0" max="100" value="0"
                             style="width: 66px; background: transparent; color:#111; border:1px solid rgba(0,0,0,0.25); border-radius:6px; padding:2px 6px;">
                     </div>
