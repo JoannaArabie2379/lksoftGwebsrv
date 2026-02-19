@@ -829,4 +829,46 @@ const API = {
             return API.post(`/admin/db-backups/${encodeURIComponent(id)}/restore`, {});
         },
     },
+
+    // ========================
+    // Инвентаризация
+    // ========================
+    inventory: {
+        cards(params = {}) {
+            return API.get('/inventory-cards', params);
+        },
+        byWell(wellId) {
+            return API.get(`/inventory-cards/well/${wellId}`);
+        },
+        wellDirections(wellId) {
+            return API.get(`/inventory-cards/well/${wellId}/directions`);
+        },
+        getCard(id) {
+            return API.get(`/inventory-cards/${id}`);
+        },
+        createCard(data) {
+            return API.post('/inventory-cards', data);
+        },
+        updateCard(id, data) {
+            return API.put(`/inventory-cards/${id}`, data);
+        },
+        deleteCard(id) {
+            return API.delete(`/inventory-cards/${id}`);
+        },
+        attachments(cardId) {
+            return API.get(`/inventory-cards/${cardId}/attachments`);
+        },
+        uploadAttachment(cardId, file, description = '') {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (description) formData.append('description', description);
+            return API.upload(`/inventory-cards/${cardId}/attachments`, formData);
+        },
+        deleteAttachment(id) {
+            return API.delete(`/inventory-cards/attachments/${id}`);
+        },
+        geojson(params = {}) {
+            return API.get('/inventory/geojson', params);
+        },
+    },
 };

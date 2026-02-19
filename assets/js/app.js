@@ -1386,6 +1386,490 @@ const App = {
         }
     },
 
+    // ========================
+    // Инвентаризация: карточки колодцев
+    // ========================
+
+    async showAddInventoryCardModal(wellId, prefill = null) {
+        if (!this.canWrite()) {
+            this.notify('Недостаточно прав', 'error');
+            return;
+        }
+        const wid = parseInt(wellId || 0, 10);
+        if (!wid) return;
+
+        try {
+            // directions for well
+            const [dirsResp, cardsResp, ownersResp] = await Promise.all([
+                API.inventory.wellDirections(wid),
+                API.inventory.byWell(wid).catch(() => ({ success: true, data: [] })),
+                API.references.all('owners').catch(() => ({ success: true, data: [] })),
+            ]);
+            const dirs = dirsResp?.data || dirsResp || [];
+            const cards = cardsResp?.data || cardsResp || [];
+            const owners = ownersResp?.data || ownersResp || [];
+
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            const defDate = `${yyyy}-${mm}-${dd}`;
+
+            const countsMap = {};
+            const pre = prefill && typeof prefill === 'object' ? prefill : null;
+            const preDir = pre?.directionCounts || null;
+            if (preDir && typeof preDir === 'object') {
+                Object.keys(preDir).forEach(k => {
+                    const n = parseInt(k, 10);
+                    if (!n) return;
+                    const v = parseInt(preDir[k], 10);
+                    countsMap[n] = Number.isFinite(v) ? v : 0;
+                });
+            }
+
+            const tags = Array.isArray(pre?.tags) ? pre.tags : [];
+
+            const ownersOptions = `<option value="">Выберите собственника...</option>` +
+                (owners || []).map(o => `<option value="${o.id}">${this.escapeHtml(o.name || o.code || o.id)}</option>`).join('');
+
+            const directionsRows = (dirs || []).map(d => {
+                const did = Number(d.id || 0);
+                const v = Math.max(0, Math.min(100, Number(countsMap[did] ?? 0) || 0));
+                const label = `${d.number || did} (${d.start_well_number || d.start_well_id || '-'} → ${d.end_well_number || d.end_well_id || '-'})`;
+                return `
+                    <div class="form-group" style="margin-bottom:10px;">
+                        <label>${this.escapeHtml(label)}</label>
+                        <input type="number" class="inv-dir-count" data-direction-id="${did}" min="0" max="100" value="${v}">
+                    </div>
+                `;
+            }).join('');
+
+            const tagsRows = (tags.length ? tags : [null]).map((t, idx) => {
+                const val = t ? String(t) : '';
+                return `
+                    <div class="form-group inv-tag-row" style="display:flex; gap:8px; align-items:center;">
+                        <select class="inv-tag-owner" style="flex:1;">${ownersOptions}</select>
+                        <button type="button" class="btn btn-sm btn-danger" onclick="App.removeInvTagRow(this)" title="Удалить бирку"><i class="fas fa-trash"></i></button>
+                    </div>
+                `;
+            }).join('');
+
+            const content = `
+                <div style="display:flex; gap:16px; align-items:flex-start;">
+                    <div style="flex: 1 1 auto; min-width: 380px;">
+                        <div class="form-group">
+                            <label>Номер</label>
+                            <input type="text" value="(авто: ИНВ-<код собственника>-<номер>)" disabled style="background: var(--bg-tertiary);">
+                        </div>
+                        <div class="form-group">
+                            <label>Дата заполнения</label>
+                            <input type="date" id="inv-filled-date" value="${defDate}">
+                        </div>
+
+                        <hr>
+                        <h4>Кабели в направлениях колодца</h4>
+                        <div style="max-height: 45vh; overflow:auto; padding-right:6px;">
+                            ${directionsRows || '<div class="text-muted">У колодца нет направлений</div>'}
+                        </div>
+
+                        <hr>
+                        <h4>Обнаруженные бирки</h4>
+                        <div id="inv-tags">${tagsRows}</div>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="App.addInvTagRow()">
+                            <i class="fas fa-plus"></i> Добавить бирку
+                        </button>
+                    </div>
+
+                    <div style="flex: 0 0 280px; max-width: 280px;">
+                        <div class="text-muted" style="margin-bottom:8px;">Карточки колодца</div>
+                        <div style="max-height: 65vh; overflow:auto; border:1px solid var(--border-color); border-radius:6px; padding:8px;">
+                            ${(cards || []).map(c => `
+                                <button class="btn btn-block btn-secondary" style="margin-bottom:8px;" onclick="App.openInventoryCard(${Number(c.id)})">
+                                    ${this.escapeHtml(c.number || c.id)}<br>
+                                    <span class="text-muted">${this.escapeHtml(c.filled_date || '')}</span>
+                                </button>
+                            `).join('') || `<div class="text-muted">Пока нет карточек</div>`}
+                        </div>
+                    </div>
+                </div>
+            `;
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+                <button class="btn btn-primary" onclick="App.submitInventoryCardCreate(${wid})"><i class="fas fa-save"></i> Создать</button>
+            `;
+            this.showModal('Инвентарная карточка — создание', content, footer);
+
+            // preselect tag values
+            try {
+                const selects = Array.from(document.querySelectorAll('#inv-tags .inv-tag-owner'));
+                selects.forEach((s, idx) => {
+                    const v = tags[idx] ? String(tags[idx]) : '';
+                    if (v) s.value = v;
+                });
+            } catch (_) {}
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    addInvTagRow() {
+        try {
+            const host = document.getElementById('inv-tags');
+            if (!host) return;
+            // clone first row options
+            const firstSel = host.querySelector('.inv-tag-owner');
+            const opts = firstSel ? firstSel.innerHTML : '<option value="">Выберите собственника...</option>';
+            const row = document.createElement('div');
+            row.className = 'form-group inv-tag-row';
+            row.style.display = 'flex';
+            row.style.gap = '8px';
+            row.style.alignItems = 'center';
+            row.innerHTML = `
+                <select class="inv-tag-owner" style="flex:1;">${opts}</select>
+                <button type="button" class="btn btn-sm btn-danger" onclick="App.removeInvTagRow(this)" title="Удалить бирку"><i class="fas fa-trash"></i></button>
+            `;
+            host.appendChild(row);
+        } catch (_) {}
+    },
+
+    removeInvTagRow(btn) {
+        try {
+            const row = btn?.closest?.('.inv-tag-row');
+            if (row) row.remove();
+        } catch (_) {}
+    },
+
+    async submitInventoryCardCreate(wellId) {
+        const wid = parseInt(wellId || 0, 10);
+        if (!wid) return;
+        try {
+            const filled = document.getElementById('inv-filled-date')?.value || '';
+            const dirInputs = Array.from(document.querySelectorAll('.inv-dir-count[data-direction-id]'));
+            const direction_cables = dirInputs.map(inp => {
+                const did = parseInt(inp.getAttribute('data-direction-id') || '0', 10);
+                let cnt = parseInt(inp.value || '0', 10);
+                if (!Number.isFinite(cnt) || Number.isNaN(cnt)) cnt = 0;
+                cnt = Math.max(0, Math.min(100, cnt));
+                return { direction_id: did, cable_count: cnt };
+            }).filter(x => x.direction_id > 0);
+
+            const tagOwners = Array.from(document.querySelectorAll('#inv-tags .inv-tag-owner'))
+                .map(s => parseInt(s.value || '0', 10))
+                .filter(v => v > 0);
+
+            const resp = await API.inventory.createCard({
+                well_id: wid,
+                filled_date: filled,
+                direction_cables,
+                tags: tagOwners,
+            });
+            if (resp?.success === false) {
+                this.notify(resp?.message || 'Ошибка', 'error');
+                return;
+            }
+            const card = resp?.data || resp || {};
+            this.hideModal();
+            this.notify('Инвентарная карточка создана', 'success');
+            this.loadObjects();
+            // открыть карточку
+            const id = parseInt(card?.id || 0, 10);
+            if (id) this.openInventoryCard(id);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка создания', 'error');
+        }
+    },
+
+    async openInventoryCard(cardId) {
+        const id = parseInt(cardId || 0, 10);
+        if (!id) return;
+        try {
+            const resp = await API.inventory.getCard(id);
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            const card = resp?.data || resp || {};
+            const wellId = parseInt(card?.well_id || 0, 10);
+            const listResp = wellId ? await API.inventory.byWell(wellId) : { success: true, data: [] };
+            const cards = listResp?.data || listResp || [];
+
+            const dirRows = Array.isArray(card.direction_cables) ? card.direction_cables : [];
+            const tags = Array.isArray(card.tags) ? card.tags : [];
+            const atts = Array.isArray(card.attachments) ? card.attachments : [];
+
+            const content = `
+                <div style="display:flex; gap:16px; align-items:flex-start;">
+                    <div style="flex: 1 1 auto; min-width: 380px;">
+                        <div class="form-group">
+                            <label>Номер</label>
+                            <input type="text" value="${this.escapeHtml(card.number || '')}" disabled style="background: var(--bg-tertiary);">
+                        </div>
+                        <div class="form-group">
+                            <label>Дата заполнения</label>
+                            <input type="date" id="inv-view-filled-date" value="${this.escapeHtml(card.filled_date || '')}" disabled style="background: var(--bg-tertiary);">
+                        </div>
+                        <hr>
+                        <h4>Кабели в направлениях</h4>
+                        <div style="max-height: 45vh; overflow:auto; padding-right:6px;">
+                            ${dirRows.map(r => `
+                                <div class="form-group" style="margin-bottom:10px;">
+                                    <label>${this.escapeHtml(r.direction_number || r.direction_id)}</label>
+                                    <input type="number" value="${Number(r.cable_count || 0)}" disabled style="background: var(--bg-tertiary);">
+                                </div>
+                            `).join('') || '<div class="text-muted">Нет записей</div>'}
+                        </div>
+                        <hr>
+                        <h4>Обнаруженные бирки</h4>
+                        <div>
+                            ${tags.map(t => `<div class="text-muted" style="margin-bottom:6px;">${this.escapeHtml(t.owner_name || t.owner_code || t.owner_id)}</div>`).join('') || '<div class="text-muted">Нет</div>'}
+                        </div>
+                        <hr>
+                        <h4>Файлы</h4>
+                        <div id="inv-att-list">
+                            ${atts.map(a => `
+                                <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+                                    <a href="${this.escapeHtml(a.url || '#')}" target="_blank" rel="noopener">${this.escapeHtml(a.original_filename || a.filename || '')}</a>
+                                </div>
+                            `).join('') || '<div class="text-muted">Нет файлов</div>'}
+                        </div>
+                    </div>
+                    <div style="flex: 0 0 280px; max-width: 280px;">
+                        <div class="text-muted" style="margin-bottom:8px;">Карточки колодца</div>
+                        <div style="max-height: 65vh; overflow:auto; border:1px solid var(--border-color); border-radius:6px; padding:8px;">
+                            ${(cards || []).map(c => {
+                                const isActive = Number(c.id) === Number(id);
+                                return `
+                                    <button class="btn btn-block ${isActive ? 'btn-primary' : 'btn-secondary'}" style="margin-bottom:8px;" onclick="App.openInventoryCard(${Number(c.id)})">
+                                        ${this.escapeHtml(c.number || c.id)}<br>
+                                        <span class="text-muted">${this.escapeHtml(c.filled_date || '')}</span>
+                                    </button>
+                                `;
+                            }).join('') || `<div class="text-muted">Пока нет карточек</div>`}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+                ${this.canDelete() ? `<button class="btn btn-danger" onclick="App.deleteInventoryCard(${id})"><i class="fas fa-trash"></i> Удалить</button>` : ''}
+                ${this.canWrite() ? `<button class="btn btn-primary" onclick="App.showEditInventoryCardModal(${id})"><i class="fas fa-edit"></i> Редактировать</button>` : ''}
+            `;
+
+            this.showModal('Инвентарная карточка', content, footer);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    async deleteInventoryCard(id) {
+        const cid = parseInt(id || 0, 10);
+        if (!cid) return;
+        if (!this.canDelete()) {
+            this.notify('Недостаточно прав', 'error');
+            return;
+        }
+        if (!confirm('Удалить инвентарную карточку?')) return;
+        try {
+            const resp = await API.inventory.deleteCard(cid);
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            this.hideModal();
+            this.notify('Удалено', 'success');
+            this.loadObjects();
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка удаления', 'error');
+        }
+    },
+
+    async showEditInventoryCardModal(cardId) {
+        const id = parseInt(cardId || 0, 10);
+        if (!id) return;
+        if (!this.canWrite()) {
+            this.notify('Недостаточно прав', 'error');
+            return;
+        }
+        try {
+            const resp = await API.inventory.getCard(id);
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            const card = resp?.data || resp || {};
+            const wellId = parseInt(card?.well_id || 0, 10);
+
+            const [dirsResp, ownersResp, cardsResp] = await Promise.all([
+                API.inventory.wellDirections(wellId),
+                API.references.all('owners'),
+                API.inventory.byWell(wellId).catch(() => ({ success: true, data: [] })),
+            ]);
+            const dirs = dirsResp?.data || dirsResp || [];
+            const owners = ownersResp?.data || ownersResp || [];
+            const cards = cardsResp?.data || cardsResp || [];
+
+            const existing = new Map((Array.isArray(card.direction_cables) ? card.direction_cables : []).map(r => [Number(r.direction_id), Number(r.cable_count || 0)]));
+            const existingTags = (Array.isArray(card.tags) ? card.tags : []).map(t => Number(t.owner_id || 0)).filter(x => x > 0);
+            const atts = Array.isArray(card.attachments) ? card.attachments : [];
+
+            const ownersOptions = `<option value="">Выберите собственника...</option>` +
+                (owners || []).map(o => `<option value="${o.id}">${this.escapeHtml(o.name || o.code || o.id)}</option>`).join('');
+
+            const directionsRows = (dirs || []).map(d => {
+                const did = Number(d.id || 0);
+                const v = Math.max(0, Math.min(100, Number(existing.get(did) ?? 0) || 0));
+                const label = `${d.number || did} (${d.start_well_number || d.start_well_id || '-'} → ${d.end_well_number || d.end_well_id || '-'})`;
+                return `
+                    <div class="form-group" style="margin-bottom:10px;">
+                        <label>${this.escapeHtml(label)}</label>
+                        <input type="number" class="inv-dir-count" data-direction-id="${did}" min="0" max="100" value="${v}">
+                    </div>
+                `;
+            }).join('');
+
+            const tagsRows = (existingTags.length ? existingTags : [null]).map(() => `
+                <div class="form-group inv-tag-row" style="display:flex; gap:8px; align-items:center;">
+                    <select class="inv-tag-owner" style="flex:1;">${ownersOptions}</select>
+                    <button type="button" class="btn btn-sm btn-danger" onclick="App.removeInvTagRow(this)" title="Удалить бирку"><i class="fas fa-trash"></i></button>
+                </div>
+            `).join('');
+
+            const content = `
+                <div style="display:flex; gap:16px; align-items:flex-start;">
+                    <div style="flex: 1 1 auto; min-width: 380px;">
+                        <div class="form-group">
+                            <label>Номер</label>
+                            <input type="text" value="${this.escapeHtml(card.number || '')}" disabled style="background: var(--bg-tertiary);">
+                        </div>
+                        <div class="form-group">
+                            <label>Дата заполнения</label>
+                            <input type="date" id="inv-filled-date" value="${this.escapeHtml(card.filled_date || '')}">
+                        </div>
+                        <hr>
+                        <h4>Кабели в направлениях колодца</h4>
+                        <div style="max-height: 45vh; overflow:auto; padding-right:6px;">
+                            ${directionsRows || '<div class="text-muted">У колодца нет направлений</div>'}
+                        </div>
+                        <hr>
+                        <h4>Обнаруженные бирки</h4>
+                        <div id="inv-tags">${tagsRows}</div>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="App.addInvTagRow()">
+                            <i class="fas fa-plus"></i> Добавить бирку
+                        </button>
+
+                        <hr>
+                        <h4>Файлы</h4>
+                        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+                            <input type="file" id="inv-attachment-file">
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="App.uploadInventoryAttachment(${id})"><i class="fas fa-upload"></i> Загрузить</button>
+                        </div>
+                        <div>
+                            ${atts.map(a => `
+                                <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+                                    <a href="${this.escapeHtml(a.url || '#')}" target="_blank" rel="noopener" style="flex:1;">${this.escapeHtml(a.original_filename || a.filename || '')}</a>
+                                    ${this.canDelete() ? `<button type="button" class="btn btn-sm btn-danger" onclick="App.deleteInventoryAttachment(${id}, ${Number(a.id)})" title="Удалить файл"><i class="fas fa-trash"></i></button>` : ''}
+                                </div>
+                            `).join('') || '<div class="text-muted">Нет файлов</div>'}
+                        </div>
+                    </div>
+
+                    <div style="flex: 0 0 280px; max-width: 280px;">
+                        <div class="text-muted" style="margin-bottom:8px;">Карточки колодца</div>
+                        <div style="max-height: 65vh; overflow:auto; border:1px solid var(--border-color); border-radius:6px; padding:8px;">
+                            ${(cards || []).map(c => {
+                                const isActive = Number(c.id) === Number(id);
+                                return `
+                                    <button class="btn btn-block ${isActive ? 'btn-primary' : 'btn-secondary'}" style="margin-bottom:8px;" onclick="App.openInventoryCard(${Number(c.id)})">
+                                        ${this.escapeHtml(c.number || c.id)}<br>
+                                        <span class="text-muted">${this.escapeHtml(c.filled_date || '')}</span>
+                                    </button>
+                                `;
+                            }).join('') || `<div class="text-muted">Пока нет карточек</div>`}
+                        </div>
+                    </div>
+                </div>
+            `;
+            const footer = `
+                <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
+                <button class="btn btn-primary" onclick="App.submitInventoryCardUpdate(${id}, ${wellId})"><i class="fas fa-save"></i> Сохранить</button>
+            `;
+            this.showModal('Инвентарная карточка — редактирование', content, footer);
+            // fill tag selects
+            try {
+                const sels = Array.from(document.querySelectorAll('#inv-tags .inv-tag-owner'));
+                sels.forEach((s, idx) => {
+                    const v = existingTags[idx] ? String(existingTags[idx]) : '';
+                    if (v) s.value = v;
+                });
+            } catch (_) {}
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка', 'error');
+        }
+    },
+
+    async submitInventoryCardUpdate(cardId, wellId) {
+        const id = parseInt(cardId || 0, 10);
+        if (!id) return;
+        try {
+            const filled = document.getElementById('inv-filled-date')?.value || '';
+            const dirInputs = Array.from(document.querySelectorAll('.inv-dir-count[data-direction-id]'));
+            const direction_cables = dirInputs.map(inp => {
+                const did = parseInt(inp.getAttribute('data-direction-id') || '0', 10);
+                let cnt = parseInt(inp.value || '0', 10);
+                if (!Number.isFinite(cnt) || Number.isNaN(cnt)) cnt = 0;
+                cnt = Math.max(0, Math.min(100, cnt));
+                return { direction_id: did, cable_count: cnt };
+            }).filter(x => x.direction_id > 0);
+
+            const tagOwners = Array.from(document.querySelectorAll('#inv-tags .inv-tag-owner'))
+                .map(s => parseInt(s.value || '0', 10))
+                .filter(v => v > 0);
+
+            const resp = await API.inventory.updateCard(id, {
+                filled_date: filled,
+                direction_cables,
+                tags: tagOwners,
+            });
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            this.hideModal();
+            this.notify('Сохранено', 'success');
+            this.loadObjects();
+            this.openInventoryCard(id);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка сохранения', 'error');
+        }
+    },
+
+    async uploadInventoryAttachment(cardId) {
+        const id = parseInt(cardId || 0, 10);
+        if (!id) return;
+        try {
+            const input = document.getElementById('inv-attachment-file');
+            const file = input?.files?.[0] || null;
+            if (!file) {
+                this.notify('Выберите файл', 'warning');
+                return;
+            }
+            const resp = await API.inventory.uploadAttachment(id, file, '');
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            this.notify('Файл загружен', 'success');
+            this.showEditInventoryCardModal(id);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка загрузки', 'error');
+        }
+    },
+
+    async deleteInventoryAttachment(cardId, attachmentId) {
+        const cid = parseInt(cardId || 0, 10);
+        const aid = parseInt(attachmentId || 0, 10);
+        if (!cid || !aid) return;
+        if (!this.canDelete()) {
+            this.notify('Недостаточно прав', 'error');
+            return;
+        }
+        if (!confirm('Удалить файл?')) return;
+        try {
+            const resp = await API.inventory.deleteAttachment(aid);
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            this.notify('Файл удалён', 'success');
+            this.showEditInventoryCardModal(cid);
+        } catch (e) {
+            this.notify(e?.message || 'Ошибка удаления файла', 'error');
+        }
+    },
+
     async recalculateCableLengths() {
         if (!this.canWrite()) {
             this.notify('Недостаточно прав', 'error');
@@ -1723,6 +2207,18 @@ const App = {
                             <i class="fas fa-images"></i>
                         </button>
                     ` : ''}
+                    ${this.currentTab === 'wells' ? `
+                        ${(Number(row.inventory_cards_count || 0) > 0 && Number(row.last_inventory_card_id || 0) > 0) ? `
+                            <button class="btn btn-sm btn-secondary" onclick="App.openInventoryCard(${Number(row.last_inventory_card_id)})" title="Открыть последнюю инвентарную карточку">
+                                <i class="fas fa-clipboard-list"></i>
+                            </button>
+                        ` : ``}
+                        ${this.canWrite() ? `
+                            <button class="btn btn-sm btn-secondary" onclick="App.showAddInventoryCardModal(${Number(row.id)})" title="Добавить инвентарную карточку">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        ` : ``}
+                    ` : ``}
                     ${this.currentTab === 'channels' ? '' : `
                         <button class="btn btn-sm btn-secondary" onclick="App.viewObject(${row.id})" title="Показать на карте">
                             <i class="fas fa-eye"></i>
