@@ -499,6 +499,10 @@ const App = {
             this.pagination.page = 1;
             this.loadObjects();
         });
+        document.getElementById('wells-filter-has-inventory')?.addEventListener('change', () => {
+            this.pagination.page = 1;
+            this.loadObjects();
+        });
         document.getElementById('objects-filter-type')?.addEventListener('change', () => {
             this.pagination.page = 1;
             this.loadObjects();
@@ -1326,6 +1330,11 @@ const App = {
         document.getElementById('btn-recalc-cable-lengths')?.classList.toggle('hidden', tab !== 'unified_cables' || !this.canWrite());
         // Кнопка "Найти клоны" — только для "Колодцы"
         document.getElementById('btn-find-clones')?.classList.toggle('hidden', tab !== 'wells');
+        // Чекбокс "только с инвентаризацией" — только для "Колодцы"
+        try {
+            const wrap = document.getElementById('wells-only-inventory-wrap');
+            if (wrap) wrap.style.display = (tab === 'wells') ? 'flex' : 'none';
+        } catch (_) {}
 
         this.loadObjects();
     },
@@ -1519,6 +1528,13 @@ const App = {
                         <button type="button" class="btn btn-sm btn-secondary" onclick="App.addInvTagRow()">
                             <i class="fas fa-plus"></i> Добавить бирку
                         </button>
+
+                        <hr>
+                        <h4>Файлы</h4>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="file" id="inv-create-attachment-file" multiple>
+                        </div>
+                        <div class="text-muted" style="margin-top:6px;">Файлы будут загружены после создания карточки.</div>
                     </div>
 
                     <div style="flex: 0 0 280px; max-width: 280px;">
@@ -1538,7 +1554,7 @@ const App = {
                 <button class="btn btn-secondary" onclick="App.hideModal()">Закрыть</button>
                 <button class="btn btn-primary" onclick="App.submitInventoryCardCreate(${wid})"><i class="fas fa-save"></i> Создать</button>
             `;
-            this.showModal('Инвентарная карточка — создание', content, footer);
+            this.showModal('Инвентарная карточка — создание', content, footer, { fitContent: true });
 
             // preselect tag values
             try {
@@ -1598,6 +1614,9 @@ const App = {
                 .map(s => parseInt(s.value || '0', 10))
                 .filter(v => v > 0);
 
+            const fileInput = document.getElementById('inv-create-attachment-file');
+            const files = Array.from(fileInput?.files || []);
+
             const resp = await API.inventory.createCard({
                 well_id: wid,
                 filled_date: filled,
@@ -1609,11 +1628,17 @@ const App = {
                 return;
             }
             const card = resp?.data || resp || {};
+            const id = parseInt(card?.id || 0, 10);
+            if (id && files.length) {
+                // Загружаем файлы ПОСЛЕ создания карточки
+                for (const f of files) {
+                    try { await API.inventory.uploadAttachment(id, f, ''); } catch (_) {}
+                }
+            }
+
             this.hideModal();
             this.notify('Инвентарная карточка создана', 'success');
             this.loadObjects();
-            // открыть карточку
-            const id = parseInt(card?.id || 0, 10);
             if (id) this.openInventoryCard(id);
         } catch (e) {
             this.notify(e?.message || 'Ошибка создания', 'error');
@@ -2049,6 +2074,10 @@ const App = {
             const owner = document.getElementById('objects-filter-owner')?.value;
             const kind = document.getElementById('objects-filter-type')?.value;
             if (owner) params.owner_id = owner;
+            if (this.currentTab === 'wells') {
+                const hasInv = !!document.getElementById('wells-filter-has-inventory')?.checked;
+                if (hasInv) params.has_inventory = 1;
+            }
             if (kind) {
                 // Для большинства вкладок фильтруем по kind_id (object_kinds)
                 if (this.currentTab === 'wells' || this.currentTab === 'markers' || this.currentTab === 'channels') {
@@ -5345,7 +5374,7 @@ const App = {
         document.getElementById('modal-footer').innerHTML = footer;
         const modal = document.getElementById('modal');
         // сброс вариантов позиционирования/режимов
-        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right', 'modal-top-right');
+        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right', 'modal-top-right', 'modal-fit-content');
         // применяем опции (если есть)
         try {
             const o = opts || {};
@@ -5353,6 +5382,7 @@ const App = {
             if (o.position === 'bottom-left') modal.classList.add('modal-bottom-left');
             if (o.position === 'bottom-right') modal.classList.add('modal-bottom-right');
             if (o.position === 'top-right') modal.classList.add('modal-top-right');
+            if (o.fitContent) modal.classList.add('modal-fit-content');
         } catch (_) {}
         modal.classList.remove('hidden');
 
@@ -5373,7 +5403,7 @@ const App = {
         const modal = document.getElementById('modal');
         modal.classList.add('hidden');
         // сбрасываем модификаторы, чтобы следующий показ был "обычным"
-        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right', 'modal-top-right');
+        modal.classList.remove('modal-nonblocking', 'modal-bottom-left', 'modal-bottom-right', 'modal-top-right', 'modal-fit-content');
     },
 
     /**

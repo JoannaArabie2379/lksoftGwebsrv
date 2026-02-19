@@ -1115,6 +1115,11 @@ body.ctrl-down #objects-table .obj-select-col {
     max-height: 45vh;
 }
 
+.modal.modal-fit-content .modal-content {
+    max-width: fit-content;
+    width: fit-content;
+}
+
 .modal-content {
     background: var(--bg-card);
     border-radius: 12px;

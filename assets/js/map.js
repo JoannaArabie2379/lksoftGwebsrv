@@ -546,23 +546,16 @@ const MapManager = {
             };
 
             const buildInvLabel = (latlng, text) => {
-                const html = `<div style="background: rgba(255,255,255,0.85); color:#111; padding:2px 6px; border-radius:6px; border:1px solid rgba(0,0,0,0.25); font-size:12px; font-weight:600; white-space:nowrap;">${text}</div>`;
+                const html = `<div style="transform: translate(-50%, -50%) rotate(var(--inv-angle, 0deg));">
+                    <div style="background: rgba(255,255,255,0.85); color:#111; padding:2px 6px; border-radius:6px; border:1px solid rgba(0,0,0,0.25); font-size:12px; font-weight:600; white-space:nowrap;">
+                        ${text}
+                    </div>
+                </div>`;
                 return L.marker(latlng, {
                     icon: L.divIcon({ className: 'inv-unacc-label', html, iconSize: null }),
                     interactive: false,
                     pane: 'inventoryLabelPane',
                 });
-            };
-
-            const getMidpoint = (latlngs) => {
-                try {
-                    const pts = Array.isArray(latlngs) ? latlngs.flat(Infinity) : [];
-                    const ll = pts.filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number');
-                    if (!ll.length) return null;
-                    return ll[Math.floor(ll.length / 2)];
-                } catch (_) {
-                    return null;
-                }
             };
 
             // Рендерим линии
@@ -572,7 +565,7 @@ const MapManager = {
                     const p = feature?.properties || {};
                     const u = p.inv_unaccounted;
                     const hasInv = (p.inv_unaccounted !== null && p.inv_unaccounted !== undefined);
-                    const color = hasInv ? colorForUnaccounted(u) : '#555555';
+                    const color = hasInv ? colorForUnaccounted(u) : '#777777';
                     const weight = hasInv ? (this.getDirectionLineWeight() * 2) : this.getDirectionLineWeight();
                     return { color, weight, opacity: 0.85 };
                 },
@@ -581,9 +574,8 @@ const MapManager = {
                     const dirId = parseInt(p.id || 0, 10);
                     layer._igsMeta = { objectType: 'channel_direction', properties: p };
                     try {
-                        // Интерактивность: для направлений без инвентаризации — hover popup со списком кабелей
-                        const hasInv = (p.inv_unaccounted !== null && p.inv_unaccounted !== undefined);
-                        if (!hasInv && dirId) {
+                        // Интерактивность: hover popup со списком кабелей (для всех направлений)
+                        if (dirId) {
                             layer.on('mouseover', async (e) => {
                                 try {
                                     const cached = this._inventoryCablesPopupCache.get(dirId);
@@ -613,9 +605,22 @@ const MapManager = {
                         const hasInv = (p.inv_unaccounted !== null && p.inv_unaccounted !== undefined);
                         if (hasInv) {
                             const latlngs = layer.getLatLngs?.();
-                            const mid = getMidpoint(latlngs);
-                            if (mid && this.inventoryLabelsLayer) {
-                                buildInvLabel(mid, String(p.inv_unaccounted)).addTo(this.inventoryLabelsLayer);
+                            const g = this._polylineMidpointAndAngle(latlngs);
+                            if (g?.mid && this.inventoryLabelsLayer) {
+                                const m = buildInvLabel(g.mid, String(p.inv_unaccounted));
+                                try {
+                                    // пробрасываем угол как CSS-переменную через style
+                                    const el = m.getElement?.();
+                                    if (el) el.style.setProperty('--inv-angle', `${g.angle}deg`);
+                                } catch (_) {}
+                                // leaflets markers: зададим через onAdd
+                                m.on('add', () => {
+                                    try {
+                                        const el = m.getElement();
+                                        if (el) el.style.setProperty('--inv-angle', `${g.angle}deg`);
+                                    } catch (_) {}
+                                });
+                                m.addTo(this.inventoryLabelsLayer);
                             }
                         }
                     } catch (_) {}
@@ -653,6 +658,63 @@ const MapManager = {
             App.notify('Режим инвентаризации включён: выберите колодец', 'info');
         } else {
             this.cancelInventoryMode();
+        }
+    },
+
+    // ========================
+    // Геометрия: центр линии + угол (для подписей)
+    // ========================
+    _polylineMidpointAndAngle(latlngs) {
+        try {
+            if (!this.map || !latlngs) return null;
+            // Нормализация в массив линий
+            const lines = Array.isArray(latlngs) && Array.isArray(latlngs[0]) ? latlngs : [latlngs];
+            if (!lines.length) return null;
+
+            // выбираем самую "длинную" линию
+            const lenOf = (arr) => {
+                let sum = 0;
+                for (let i = 1; i < (arr || []).length; i++) {
+                    try { sum += this.map.distance(arr[i - 1], arr[i]); } catch (_) {}
+                }
+                return sum;
+            };
+            let best = lines[0] || [];
+            let bestLen = lenOf(best);
+            for (const ln of lines) {
+                const l = lenOf(ln || []);
+                if (l > bestLen) { best = ln || []; bestLen = l; }
+            }
+            const pts = (best || []).filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number');
+            if (pts.length < 2) return null;
+
+            const total = lenOf(pts);
+            const half = total / 2;
+            let acc = 0;
+            for (let i = 1; i < pts.length; i++) {
+                const a = pts[i - 1];
+                const b = pts[i];
+                const seg = this.map.distance(a, b);
+                if (acc + seg >= half) {
+                    const t = seg > 0 ? ((half - acc) / seg) : 0.5;
+                    const mid = L.latLng(a.lat + (b.lat - a.lat) * t, a.lng + (b.lng - a.lng) * t);
+                    const p1 = this.map.latLngToLayerPoint(a);
+                    const p2 = this.map.latLngToLayerPoint(b);
+                    const angle = Math.atan2((p2.y - p1.y), (p2.x - p1.x)) * 180 / Math.PI;
+                    return { mid, angle };
+                }
+                acc += seg;
+            }
+            // fallback: середина по индексу
+            const mid = pts[Math.floor(pts.length / 2)];
+            const a = pts[Math.max(0, Math.floor(pts.length / 2) - 1)];
+            const b = pts[Math.min(pts.length - 1, Math.floor(pts.length / 2) + 1)];
+            const p1 = this.map.latLngToLayerPoint(a);
+            const p2 = this.map.latLngToLayerPoint(b);
+            const angle = Math.atan2((p2.y - p1.y), (p2.x - p1.x)) * 180 / Math.PI;
+            return { mid, angle };
+        } catch (_) {
+            return null;
         }
     },
 
@@ -705,18 +767,12 @@ const MapManager = {
 
             const inputMarkerFor = (directionId, latlng) => {
                 const safeId = String(directionId);
-                let label = '';
-                try {
-                    const meta = this._inventoryDirectionsCache?.get?.(directionId) || null;
-                    label = (meta?.number || meta?.id || '').toString();
-                } catch (_) {
-                    label = '';
-                }
                 const html = `
-                    <div style="background: rgba(255,255,255,0.85); padding:4px 6px; border-radius:8px; border:1px solid rgba(0,0,0,0.25); box-shadow: 0 2px 6px rgba(0,0,0,0.25);">
-                        ${label ? `<div style="font-size:11px; font-weight:700; color:#111; margin-bottom:2px; text-align:center; white-space:nowrap;">${label}</div>` : ``}
-                        <input type="number" data-direction-id="${safeId}" min="0" max="100" value="0"
-                            style="width: 66px; background: transparent; color:#111; border:1px solid rgba(0,0,0,0.25); border-radius:6px; padding:2px 6px;">
+                    <div style="transform: translate(-50%, -50%);">
+                        <div style="background: rgba(255,255,255,0.85); padding:4px 6px; border-radius:8px; border:1px solid rgba(0,0,0,0.25); box-shadow: 0 2px 6px rgba(0,0,0,0.25);">
+                            <input type="number" data-direction-id="${safeId}" min="0" max="100" value="0"
+                                style="width: 66px; background: transparent; color:#111; border:1px solid rgba(0,0,0,0.25); border-radius:6px; padding:2px 6px;">
+                        </div>
                     </div>
                 `;
                 const marker = L.marker(latlng, {
@@ -755,11 +811,9 @@ const MapManager = {
                         const did = parseInt(p.id || 0, 10);
                         if (!did) return;
                         const latlngs = layer.getLatLngs?.();
-                        const pts = Array.isArray(latlngs) ? latlngs.flat(Infinity) : [];
-                        const ll = pts.filter(x => x && typeof x.lat === 'number');
-                        if (!ll.length) return;
-                        const mid = ll[Math.floor(ll.length / 2)];
-                        inputMarkerFor(did, mid).addTo(this.inventoryInputLayer);
+                        const g = this._polylineMidpointAndAngle(latlngs);
+                        if (!g?.mid) return;
+                        inputMarkerFor(did, g.mid).addTo(this.inventoryInputLayer);
                         this.inventoryDirectionCounts[did] = 0;
                     } catch (_) {}
                 },

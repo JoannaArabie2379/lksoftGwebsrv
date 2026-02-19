@@ -17,6 +17,7 @@ class WellController extends BaseController
     public function index(): void
     {
         $pagination = $this->getPagination();
+        $hasInventory = (int) $this->request->query('has_inventory', 0);
         
         $filters = $this->buildFilters([
             'owner_id' => 'w.owner_id',
@@ -28,6 +29,11 @@ class WellController extends BaseController
 
         $where = $filters['where'];
         $params = $filters['params'];
+
+        if ($hasInventory) {
+            $invWhere = "EXISTS (SELECT 1 FROM inventory_cards ic WHERE ic.well_id = w.id)";
+            $where = $where ? ($where . " AND " . $invWhere) : $invWhere;
+        }
 
         // Общее количество (передаём алиас 'w' для корректной работы с WHERE)
         $total = $this->getTotal('wells', $where, $params, 'w');
