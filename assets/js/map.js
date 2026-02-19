@@ -97,6 +97,7 @@ const MapManager = {
     inventoryDirectionCounts: {}, // direction_id -> count
     inventoryInputLayer: null,
     inventoryLabelsLayer: null,
+    inventoryUnaccountedLabelsEnabled: true,
     _inventoryDirectionsCache: new Map(), // direction_id -> { number, start/end, ... }
     _inventoryCablesPopupCache: new Map(), // direction_id -> html
 
@@ -613,7 +614,7 @@ const MapManager = {
                     // Подпись "неучтенных"
                     try {
                         const hasInv = (p.inv_unaccounted !== null && p.inv_unaccounted !== undefined);
-                        if (hasInv) {
+                        if (hasInv && this.inventoryUnaccountedLabelsEnabled) {
                             const latlngs = layer.getLatLngs?.();
                             const g = this._polylineMidpointAndAngle(latlngs);
                             if (g?.mid && this.inventoryLabelsLayer) {
@@ -626,6 +627,32 @@ const MapManager = {
         } catch (_) {
             // ignore
         }
+    },
+
+    setInventoryUnaccountedLabelsEnabled(enabled) {
+        this.inventoryUnaccountedLabelsEnabled = !!enabled;
+        try {
+            if (!this.map || !this.inventoryLabelsLayer) return;
+            const invOn = !!(this.layers?.inventory && this.map.hasLayer(this.layers.inventory));
+            if (!invOn) {
+                this.inventoryLabelsLayer.clearLayers();
+                return;
+            }
+            const has = this.map.hasLayer(this.inventoryLabelsLayer);
+            if (this.inventoryUnaccountedLabelsEnabled && !has) {
+                this.map.addLayer(this.inventoryLabelsLayer);
+                // пересоберём подписи
+                this.loadInventoryLayer?.();
+            }
+            if (!this.inventoryUnaccountedLabelsEnabled && has) {
+                this.inventoryLabelsLayer.clearLayers();
+                this.map.removeLayer(this.inventoryLabelsLayer);
+            }
+        } catch (_) {}
+    },
+
+    toggleInventoryUnaccountedLabels() {
+        this.setInventoryUnaccountedLabelsEnabled(!this.inventoryUnaccountedLabelsEnabled);
     },
 
     toggleInventoryMode() {
@@ -2649,7 +2676,11 @@ const MapManager = {
             if (visible) {
                 this.map.addLayer(layer);
                 if (layerName === 'inventory') {
-                    try { if (this.inventoryLabelsLayer) this.map.addLayer(this.inventoryLabelsLayer); } catch (_) {}
+                    try {
+                        if (this.inventoryLabelsLayer && this.inventoryUnaccountedLabelsEnabled) {
+                            this.map.addLayer(this.inventoryLabelsLayer);
+                        }
+                    } catch (_) {}
                     // при включении слоя инвентаризации — загружаем его содержимое
                     this.loadInventoryLayer?.();
                 }

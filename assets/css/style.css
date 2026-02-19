@@ -461,6 +461,30 @@ a:hover {
     border-radius: 50%;
 }
 
+.layer-inline-btn {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.layer-inline-btn:hover {
+    background: var(--accent-color);
+    color: white;
+}
+
+.layer-inline-btn.active {
+    background: var(--accent-color);
+    color: white;
+}
+
 /* Filters */
 .filters-panel .form-group {
     margin-bottom: 12px;

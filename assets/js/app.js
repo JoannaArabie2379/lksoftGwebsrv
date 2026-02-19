@@ -402,6 +402,28 @@ const App = {
             input.addEventListener('change', () => this.handleLayerToggle(input));
         });
 
+        // Слои: подсказки "неучтенные" для инвентаризации
+        document.getElementById('btn-inventory-unacc-labels')?.addEventListener('click', (e) => {
+            try { e.preventDefault(); } catch (_) {}
+            try { e.stopPropagation(); } catch (_) {}
+            try {
+                MapManager.toggleInventoryUnaccountedLabels?.();
+                const btn = document.getElementById('btn-inventory-unacc-labels');
+                if (btn) btn.classList.toggle('active', !!MapManager.inventoryUnaccountedLabelsEnabled);
+            } catch (_) {}
+        });
+        // Слои карты: подсказки инвентаризации (неучтенные)
+        document.getElementById('btn-inventory-unacc-labels')?.addEventListener('click', (e) => {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (_) {}
+            try {
+                MapManager.toggleInventoryUnaccountedLabels?.();
+                e.currentTarget?.classList?.toggle('active', !!MapManager.inventoryUnaccountedLabelsEnabled);
+            } catch (_) {}
+        });
+
         // Фильтры (авто-применение при выборе)
         ['filter-group', 'filter-owner', 'filter-status', 'filter-contract'].forEach((id) => {
             document.getElementById(id)?.addEventListener('change', () => this.applyFilters());
@@ -1143,6 +1165,14 @@ const App = {
         // Инвентаризация: при включении автоматически выключаем все слои,
         // оставляем "Колодцы" и "Инвентаризация". Слой инвентаризации ниже колодцев.
         if (input.id === 'layer-inventory' && input.checked) {
+            // показать кнопку подсказок (по умолчанию включена)
+            try {
+                const btn = document.getElementById('btn-inventory-unacc-labels');
+                if (btn) {
+                    btn.classList.remove('hidden');
+                    btn.classList.toggle('active', !!MapManager.inventoryUnaccountedLabelsEnabled);
+                }
+            } catch (_) {}
             const set = (id, name, checked) => {
                 const cb = document.getElementById(id);
                 if (cb) cb.checked = checked;
@@ -1157,6 +1187,11 @@ const App = {
             set('layer-duct-cables', 'ductCables', false);
             this.saveLayerPreferencesDebounced();
             return;
+        }
+
+        // если выключили слой инвентаризации — прячем кнопку подсказок
+        if (input.id === 'layer-inventory' && !input.checked) {
+            try { document.getElementById('btn-inventory-unacc-labels')?.classList?.add('hidden'); } catch (_) {}
         }
 
         MapManager.toggleLayer(layerName, input.checked);
