@@ -4237,10 +4237,30 @@ const App = {
                             <td>${esc(r.direction_number || r.direction_id || '')}</td>
                             <td>${fmtLen(r.direction_length_m)}</td>
                             <td style="white-space: pre-line;">${nl(r.cable_numbers || '') || '-'}</td>
-                            <td>${esc(r.start_well_number || '-')}</td>
+                            <td>
+                                <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
+                                    <span>${esc(r.start_well_number || '-')}</span>
+                                    ${(r.start_card_id ? `
+                                        <button class="btn btn-sm btn-secondary" title="Открыть последнюю инвентарную карточку"
+                                                onclick="App.openInventoryCard(${Number(r.start_card_id)})">
+                                            <i class="fas fa-clipboard-check"></i>
+                                        </button>
+                                    ` : ``)}
+                                </div>
+                            </td>
                             <td>${Number(r.start_inventory_cables || 0)}</td>
                             <td style="white-space: pre-line;">${nl(r.start_tag_owners || '') || '-'}</td>
-                            <td>${esc(r.end_well_number || '-')}</td>
+                            <td>
+                                <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
+                                    <span>${esc(r.end_well_number || '-')}</span>
+                                    ${(r.end_card_id ? `
+                                        <button class="btn btn-sm btn-secondary" title="Открыть последнюю инвентарную карточку"
+                                                onclick="App.openInventoryCard(${Number(r.end_card_id)})">
+                                            <i class="fas fa-clipboard-check"></i>
+                                        </button>
+                                    ` : ``)}
+                                </div>
+                            </td>
                             <td>${Number(r.end_inventory_cables || 0)}</td>
                             <td style="white-space: pre-line;">${nl(r.end_tag_owners || '') || '-'}</td>
                             <td>${Number(r.unaccounted_cables || 0)}</td>
