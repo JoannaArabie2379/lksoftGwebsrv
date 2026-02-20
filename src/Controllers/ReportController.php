@@ -280,7 +280,7 @@ class ReportController extends BaseController
             ),
             tags_by_card AS (
                 SELECT it.card_id,
-                       STRING_AGG(DISTINCT o.name, E'\n' ORDER BY o.name) as tag_owners
+                       STRING_AGG(o.name, E'\n' ORDER BY it.id) as tag_owners
                 FROM inventory_tags it
                 JOIN owners o ON it.owner_id = o.id
                 GROUP BY it.card_id
@@ -718,7 +718,7 @@ class ReportController extends BaseController
                     ),
                     tags_by_card AS (
                         SELECT it.card_id,
-                               STRING_AGG(DISTINCT o.name, E'\n' ORDER BY o.name) as tag_owners
+                               STRING_AGG(o.name, E'\n' ORDER BY it.id) as tag_owners
                         FROM inventory_tags it
                         JOIN owners o ON it.owner_id = o.id
                         GROUP BY it.card_id
