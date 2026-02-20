@@ -4340,13 +4340,16 @@ const App = {
                             <td>${idx + 1}</td>
                             <td>${esc(r.direction_number || r.direction_id || '')}</td>
                             <td>${fmtLen(r.direction_length_m)}</td>
-                            <td style="white-space: pre-line;">${nl((confirmTags ? (() => {
-                                const cableOwners = parseIntLines(r.cable_owner_ids || '');
-                                const sIds = parseIntLines(r.start_tag_owner_ids || '');
-                                const eIds = parseIntLines(r.end_tag_owner_ids || '');
-                                const conf = confirmTagsByCables(cableOwners, sIds, eIds);
-                                return decorateCablesByIndexes(r.cable_numbers || '', conf.cableConfirmed);
-                            })() : (r.cable_numbers || '')) || '-'}</td>
+                            <td style="white-space: pre-line;">${(() => {
+                                const v = confirmTags ? (() => {
+                                    const cableOwners = parseIntLines(r.cable_owner_ids || '');
+                                    const sIds = parseIntLines(r.start_tag_owner_ids || '');
+                                    const eIds = parseIntLines(r.end_tag_owner_ids || '');
+                                    const conf = confirmTagsByCables(cableOwners, sIds, eIds);
+                                    return decorateCablesByIndexes(r.cable_numbers || '', conf.cableConfirmed);
+                                })() : (r.cable_numbers || '');
+                                return nl(v || '') || '-';
+                            })()}</td>
                             <td>
                                 <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
                                     <span>${esc(r.start_well_number || '-')}</span>
@@ -4359,13 +4362,16 @@ const App = {
                                 </div>
                             </td>
                             <td>${Number(r.start_inventory_cables || 0)}</td>
-                            <td style="white-space: pre-line;">${nl((confirmTags ? (() => {
-                                const cableOwners = parseIntLines(r.cable_owner_ids || '');
-                                const sIds = parseIntLines(r.start_tag_owner_ids || '');
-                                const eIds = parseIntLines(r.end_tag_owner_ids || '');
-                                const conf = confirmTagsByCables(cableOwners, sIds, eIds);
-                                return decorateTagsByIndexes(r.start_tag_owners || '', conf.startConfirmed);
-                            })() : (r.start_tag_owners || '')) ) || '-'}</td>
+                            <td style="white-space: pre-line;">${(() => {
+                                const v = confirmTags ? (() => {
+                                    const cableOwners = parseIntLines(r.cable_owner_ids || '');
+                                    const sIds = parseIntLines(r.start_tag_owner_ids || '');
+                                    const eIds = parseIntLines(r.end_tag_owner_ids || '');
+                                    const conf = confirmTagsByCables(cableOwners, sIds, eIds);
+                                    return decorateTagsByIndexes(r.start_tag_owners || '', conf.startConfirmed);
+                                })() : (r.start_tag_owners || '');
+                                return nl(v || '') || '-';
+                            })()}</td>
                             <td>
                                 <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
                                     <span>${esc(r.end_well_number || '-')}</span>
@@ -4378,13 +4384,16 @@ const App = {
                                 </div>
                             </td>
                             <td>${Number(r.end_inventory_cables || 0)}</td>
-                            <td style="white-space: pre-line;">${nl((confirmTags ? (() => {
-                                const cableOwners = parseIntLines(r.cable_owner_ids || '');
-                                const sIds = parseIntLines(r.start_tag_owner_ids || '');
-                                const eIds = parseIntLines(r.end_tag_owner_ids || '');
-                                const conf = confirmTagsByCables(cableOwners, sIds, eIds);
-                                return decorateTagsByIndexes(r.end_tag_owners || '', conf.endConfirmed);
-                            })() : (r.end_tag_owners || '')) ) || '-'}</td>
+                            <td style="white-space: pre-line;">${(() => {
+                                const v = confirmTags ? (() => {
+                                    const cableOwners = parseIntLines(r.cable_owner_ids || '');
+                                    const sIds = parseIntLines(r.start_tag_owner_ids || '');
+                                    const eIds = parseIntLines(r.end_tag_owner_ids || '');
+                                    const conf = confirmTagsByCables(cableOwners, sIds, eIds);
+                                    return decorateTagsByIndexes(r.end_tag_owners || '', conf.endConfirmed);
+                                })() : (r.end_tag_owners || '');
+                                return nl(v || '') || '-';
+                            })()}</td>
                             <td>${Number(r.unaccounted_cables || 0)}</td>
                             <td style="white-space: nowrap;">
                                 <button class="btn btn-sm btn-secondary" title="Показать на карте"
