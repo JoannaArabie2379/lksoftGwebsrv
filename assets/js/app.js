@@ -4225,10 +4225,14 @@ const App = {
             const names = parseLines(namesStr);
             const ids = parseIds(idsStr);
             if (!names.length) return '';
+            const confirmedOnce = new Set(); // owner_id -> already confirmed in this column
             const out = names.map((name, idx) => {
                 const oid = ids[idx] || 0;
-                const ok = oid > 0 && confirmedOwnerIds.has(oid);
-                if (ok) return `(П) ${name}`;
+                const ok = oid > 0 && confirmedOwnerIds.has(oid) && !confirmedOnce.has(oid);
+                if (ok) {
+                    confirmedOnce.add(oid);
+                    return `(П) ${name}`;
+                }
                 return `${name} (НП)`;
             });
             return out.join('\n');
