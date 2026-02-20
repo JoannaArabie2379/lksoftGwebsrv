@@ -263,6 +263,14 @@ class ReportController extends BaseController
         }
         try { $this->log('report', 'reports', null, null, ['type' => 'inventory']); } catch (\Throwable $e) {}
 
+        $ownerId = (int) $this->request->query('owner_id', 0);
+        $ownerWhere = '';
+        $params = [];
+        if ($ownerId > 0) {
+            $ownerWhere = "WHERE cd.owner_id = :oid";
+            $params['oid'] = $ownerId;
+        }
+
         // latest card per well
         $rows = $this->db->fetchAll(
             "WITH latest_cards AS (
@@ -314,7 +322,10 @@ class ReportController extends BaseController
             LEFT JOIN inventory_direction_cables edc ON edc.card_id = ec.card_id AND edc.direction_id = cd.id
             LEFT JOIN tags_by_card st ON st.card_id = sc.card_id
             LEFT JOIN tags_by_card et ON et.card_id = ec.card_id
+            {$ownerWhere}
             ORDER BY cd.number"
+            ,
+            $params
         );
 
         Response::success([
@@ -691,6 +702,14 @@ class ReportController extends BaseController
                     'Неучтённые',
                 ];
 
+                $ownerId = (int) $this->request->query('owner_id', 0);
+                $ownerWhere = '';
+                $params = [];
+                if ($ownerId > 0) {
+                    $ownerWhere = "WHERE cd.owner_id = :oid";
+                    $params['oid'] = $ownerId;
+                }
+
                 $rows = $this->db->fetchAll(
                     "WITH latest_cards AS (
                         SELECT DISTINCT ON (well_id) id as card_id, well_id, filled_date
@@ -738,7 +757,10 @@ class ReportController extends BaseController
                     LEFT JOIN inventory_direction_cables edc ON edc.card_id = ec.card_id AND edc.direction_id = cd.id
                     LEFT JOIN tags_by_card st ON st.card_id = sc.card_id
                     LEFT JOIN tags_by_card et ON et.card_id = ec.card_id
+                    {$ownerWhere}
                     ORDER BY cd.number"
+                    ,
+                    $params
                 );
 
                 $i = 1;

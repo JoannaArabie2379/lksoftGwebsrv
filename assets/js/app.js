@@ -4123,6 +4123,12 @@ const App = {
         container.classList.remove('hidden');
         container.innerHTML = '<p>Загрузка...</p>';
 
+        // Инвентаризация: отдельная отрисовка (с фильтром и счётчиком)
+        if (type === 'inventory') {
+            await this.applyInventoryReportFilter('');
+            return;
+        }
+
         try {
             let response;
             let html = '';
@@ -4145,8 +4151,7 @@ const App = {
                     html = this.renderIncidentsReport(response.data);
                     break;
                 case 'inventory':
-                    response = await API.reports.inventory();
-                    html = this.renderInventoryReport(response.data);
+                    // handled выше
                     break;
             }
 
@@ -4187,6 +4192,8 @@ const App = {
 
     renderInventoryReport(data) {
         const rows = data?.rows || [];
+        const owners = data?.owners || [];
+        const selectedOwnerId = (data?.selected_owner_id ?? '').toString();
         const esc = (s) => this.escapeHtml((s ?? '').toString());
         const nl = (s) => esc(s).replace(/\n/g, '<br>');
         const fmtLen = (v) => {
@@ -4196,6 +4203,15 @@ const App = {
         };
 
         return `
+            <div class="filters-row" style="margin: 12px 0;">
+                <select id="report-inventory-owner">
+                    <option value="">Собственник: все</option>
+                    ${owners.map(o => `<option value="${o.id}">${esc(o.name || '')}</option>`).join('')}
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="App.applyInventoryReportFilter(document.getElementById('report-inventory-owner')?.value || '')">
+                    <i class="fas fa-filter"></i> Применить
+                </button>
+            </div>
             <div class="text-muted" style="margin: 8px 0 12px 0;">Сортировка: по номеру направления.</div>
             <table>
                 <thead>
@@ -4245,6 +4261,50 @@ const App = {
                 </tbody>
             </table>
         `;
+    },
+
+    async applyInventoryReportFilter(ownerId = '') {
+        const container = document.getElementById('report-content');
+        if (!container) return;
+        container.classList.remove('hidden');
+        container.innerHTML = '<p>Загрузка...</p>';
+
+        const oid = (ownerId || '').toString().trim();
+        const params = {};
+        if (oid) params.owner_id = oid;
+
+        try {
+            const [reportResp, ownersResp] = await Promise.all([
+                API.reports.inventory(params),
+                API.references.all('owners'),
+            ]);
+            if (reportResp?.success === false) throw new Error(reportResp?.message || 'Ошибка');
+            if (ownersResp?.success === false) throw new Error(ownersResp?.message || 'Ошибка');
+
+            const rows = reportResp?.data?.rows || [];
+            const owners = ownersResp?.data || [];
+            const title = this.getReportTitle('inventory');
+            const count = Array.isArray(rows) ? rows.length : 0;
+
+            container.innerHTML = `
+                <div class="panel-header">
+                    <div style="display:flex; align-items:baseline; gap:12px; min-width:0;">
+                        <h3 style="margin:0;">${this.escapeHtml(title)}</h3>
+                        <div class="text-muted" style="white-space:nowrap;">Записей: <strong>${count}</strong></div>
+                    </div>
+                    <button class="btn btn-secondary" onclick="App.showReportExportModal('inventory')">
+                        <i class="fas fa-download"></i> Выгрузить отчет
+                    </button>
+                </div>
+                ${this.renderInventoryReport({ rows, owners, selected_owner_id: oid })}
+            `;
+
+            // восстановить выбранный фильтр
+            const sel = container.querySelector('#report-inventory-owner');
+            if (sel) sel.value = oid;
+        } catch (e) {
+            container.innerHTML = '<p style="color: var(--danger-color);">Ошибка загрузки отчёта</p>';
+        }
     },
 
     async showInventoryDirectionOnMap(directionId) {
@@ -7367,6 +7427,10 @@ const App = {
             if (type === 'contracts') {
                 const contractId = document.getElementById('report-contracts-contract')?.value || '';
                 if (contractId) params.contract_id = contractId;
+            }
+            if (type === 'inventory') {
+                const ownerId = document.getElementById('report-inventory-owner')?.value || '';
+                if (ownerId) params.owner_id = ownerId;
             }
 
             return API.reports.export(type, params, delimiter);
