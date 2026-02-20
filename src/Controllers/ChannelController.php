@@ -123,6 +123,28 @@ class ChannelController extends BaseController
             ['cable_id' => $cableId, 'k' => $k]
         );
     }
+
+    private function recalculateInventoryUnaccountedBestEffort(): void
+    {
+        try {
+            $this->db->query(
+                "WITH actual AS (
+                    SELECT cd.id as direction_id, COUNT(DISTINCT crc.cable_id)::int as actual_cables
+                    FROM channel_directions cd
+                    LEFT JOIN cable_channels cc ON cc.direction_id = cd.id
+                    LEFT JOIN cable_route_channels crc ON crc.cable_channel_id = cc.id
+                    GROUP BY cd.id
+                )
+                UPDATE inventory_summary s
+                SET unaccounted_cables = (s.max_inventory_cables - COALESCE(a.actual_cables, 0))::int,
+                    updated_at = NOW()
+                FROM actual a
+                WHERE a.direction_id = s.direction_id"
+            );
+        } catch (\Throwable $e) {
+            // best-effort: если инвентаризация не настроена/таблицы нет — игнорируем
+        }
+    }
     /**
      * GET /api/channel-directions
      * Список направлений каналов
@@ -1317,6 +1339,9 @@ class ChannelController extends BaseController
             // 5) Удаляем исходное направление (заменено на два новых)
             $this->db->delete('object_photos', "object_table = 'channel_directions' AND object_id = :id", ['id' => $directionId]);
             $this->db->delete('channel_directions', 'id = :id', ['id' => $directionId]);
+
+            // Автопересчёт "неучтенных кабелей" после изменения маршрутов duct-кабелей
+            $this->recalculateInventoryUnaccountedBestEffort();
 
             $this->db->commit();
 

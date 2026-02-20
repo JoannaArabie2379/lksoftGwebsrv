@@ -719,6 +719,9 @@ class UnifiedCableController extends BaseController
                     
                     // Пересчитываем длину
                     $this->updateDuctCableLength($cableId);
+
+                    // Автопересчёт "неучтенных кабелей" (инвентаризация) после изменения маршрута duct-кабеля
+                    $this->recalculateInventoryUnaccountedBestEffort();
                 }
             }
 
