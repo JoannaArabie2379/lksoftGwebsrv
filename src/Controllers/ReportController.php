@@ -299,7 +299,7 @@ class ReportController extends BaseController
             cables_by_direction AS (
                 SELECT cd.id as direction_id,
                        STRING_AGG(DISTINCT c.number, E'\n' ORDER BY c.number) as cable_numbers,
-                       STRING_AGG(DISTINCT c.owner_id::text, ',' ORDER BY c.owner_id) as cable_owner_ids
+                       STRING_AGG(DISTINCT c.owner_id::text, ',' ORDER BY c.owner_id::text) as cable_owner_ids
                 FROM channel_directions cd
                 LEFT JOIN cable_channels ch ON ch.direction_id = cd.id
                 LEFT JOIN cable_route_channels crc ON crc.cable_channel_id = ch.id
@@ -752,7 +752,7 @@ class ReportController extends BaseController
                     cables_by_direction AS (
                         SELECT cd.id as direction_id,
                                STRING_AGG(DISTINCT c.number, E'\n' ORDER BY c.number) as cable_numbers,
-                               STRING_AGG(DISTINCT c.owner_id::text, ',' ORDER BY c.owner_id) as cable_owner_ids
+                               STRING_AGG(DISTINCT c.owner_id::text, ',' ORDER BY c.owner_id::text) as cable_owner_ids
                         FROM channel_directions cd
                         LEFT JOIN cable_channels ch ON ch.direction_id = cd.id
                         LEFT JOIN cable_route_channels crc ON crc.cable_channel_id = ch.id
