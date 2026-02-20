@@ -296,15 +296,24 @@ class ReportController extends BaseController
                 JOIN owners o ON it.owner_id = o.id
                 GROUP BY it.card_id
             ),
-            cables_by_direction AS (
-                SELECT cd.id as direction_id,
-                       STRING_AGG(DISTINCT c.number, E'\n' ORDER BY c.number) as cable_numbers,
-                       STRING_AGG(DISTINCT c.owner_id::text, ',' ORDER BY c.owner_id::text) as cable_owner_ids
+            cables_distinct AS (
+                SELECT DISTINCT
+                    cd.id as direction_id,
+                    c.id as cable_id,
+                    c.number,
+                    c.owner_id
                 FROM channel_directions cd
                 LEFT JOIN cable_channels ch ON ch.direction_id = cd.id
                 LEFT JOIN cable_route_channels crc ON crc.cable_channel_id = ch.id
                 LEFT JOIN cables c ON c.id = crc.cable_id
-                GROUP BY cd.id
+                WHERE c.id IS NOT NULL
+            ),
+            cables_by_direction AS (
+                SELECT direction_id,
+                       STRING_AGG(number, E'\n' ORDER BY number) as cable_numbers,
+                       STRING_AGG(owner_id::text, E'\n' ORDER BY number) as cable_owner_ids
+                FROM cables_distinct
+                GROUP BY direction_id
             )
             SELECT
                 cd.id as direction_id,
@@ -749,15 +758,24 @@ class ReportController extends BaseController
                         JOIN owners o ON it.owner_id = o.id
                         GROUP BY it.card_id
                     ),
-                    cables_by_direction AS (
-                        SELECT cd.id as direction_id,
-                               STRING_AGG(DISTINCT c.number, E'\n' ORDER BY c.number) as cable_numbers,
-                               STRING_AGG(DISTINCT c.owner_id::text, ',' ORDER BY c.owner_id::text) as cable_owner_ids
+                    cables_distinct AS (
+                        SELECT DISTINCT
+                            cd.id as direction_id,
+                            c.id as cable_id,
+                            c.number,
+                            c.owner_id
                         FROM channel_directions cd
                         LEFT JOIN cable_channels ch ON ch.direction_id = cd.id
                         LEFT JOIN cable_route_channels crc ON crc.cable_channel_id = ch.id
                         LEFT JOIN cables c ON c.id = crc.cable_id
-                        GROUP BY cd.id
+                        WHERE c.id IS NOT NULL
+                    ),
+                    cables_by_direction AS (
+                        SELECT direction_id,
+                               STRING_AGG(number, E'\n' ORDER BY number) as cable_numbers,
+                               STRING_AGG(owner_id::text, E'\n' ORDER BY number) as cable_owner_ids
+                        FROM cables_distinct
+                        GROUP BY direction_id
                     )
                     SELECT
                         cd.id as direction_id,

@@ -4214,25 +4214,43 @@ const App = {
             if (!x.trim()) return [];
             return x.split('\n').map(v => parseInt(v || '0', 10)).map(v => (Number.isFinite(v) ? v : 0));
         };
-        const parseCsvIds = (s) => {
-            const x = (s ?? '').toString().trim();
-            if (!x) return [];
-            return x.split(',').map(v => parseInt(v || '0', 10)).filter(n => Number.isFinite(n) && n > 0);
-        };
-        const uniqSet = (arr) => new Set((arr || []).filter(n => Number.isFinite(n) && n > 0));
+        const parseIntLines = (s) => parseLines(s).map(v => parseInt(v || '0', 10)).map(v => (Number.isFinite(v) ? v : 0));
 
-        const decorateTags = (namesStr, idsStr, confirmedOwnerIds) => {
-            const names = parseLines(namesStr);
-            const ids = parseIds(idsStr);
-            if (!names.length) return '';
-            const confirmedOnce = new Set(); // owner_id -> already confirmed in this column
-            const out = names.map((name, idx) => {
-                const oid = ids[idx] || 0;
-                const ok = oid > 0 && confirmedOwnerIds.has(oid) && !confirmedOnce.has(oid);
-                if (ok) {
-                    confirmedOnce.add(oid);
-                    return `(П) ${name}`;
+        const confirmTagsByCables = (cableOwnerIds, startTagOwnerIds, endTagOwnerIds) => {
+            const startUsed = new Array(startTagOwnerIds.length).fill(false);
+            const endUsed = new Array(endTagOwnerIds.length).fill(false);
+            const startConfirmed = new Set();
+            const endConfirmed = new Set();
+
+            const findFirst = (arr, used, ownerId) => {
+                for (let i = 0; i < arr.length; i++) {
+                    if (used[i]) continue;
+                    if ((arr[i] || 0) === ownerId) return i;
                 }
+                return -1;
+            };
+
+            // Важно: учитываем кратность кабелей (owner_id может повторяться в списке кабелей)
+            for (const oid of (cableOwnerIds || [])) {
+                const ownerId = parseInt(oid || 0, 10);
+                if (!ownerId) continue;
+                const si = findFirst(startTagOwnerIds, startUsed, ownerId);
+                const ei = findFirst(endTagOwnerIds, endUsed, ownerId);
+                if (si >= 0 && ei >= 0) {
+                    startUsed[si] = true;
+                    endUsed[ei] = true;
+                    startConfirmed.add(si);
+                    endConfirmed.add(ei);
+                }
+            }
+            return { startConfirmed, endConfirmed };
+        };
+
+        const decorateTagsByIndexes = (namesStr, confirmedIdxSet) => {
+            const names = parseLines(namesStr);
+            if (!names.length) return '';
+            const out = names.map((name, idx) => {
+                if (confirmedIdxSet && confirmedIdxSet.has(idx)) return `(П) ${name}`;
                 return `${name} (НП)`;
             });
             return out.join('\n');
@@ -4293,14 +4311,13 @@ const App = {
                                 </div>
                             </td>
                             <td>${Number(r.start_inventory_cables || 0)}</td>
-                            <td style="white-space: pre-line;">${nl((confirmTags ? (decorateTags(r.start_tag_owners || '', r.start_tag_owner_ids || '', (() => {
-                                const c = uniqSet(parseCsvIds(r.cable_owner_ids || ''));
-                                const s = uniqSet(parseIds(r.start_tag_owner_ids || ''));
-                                const e = uniqSet(parseIds(r.end_tag_owner_ids || ''));
-                                const inter = new Set();
-                                for (const id of c) { if (s.has(id) && e.has(id)) inter.add(id); }
-                                return inter;
-                            })())) : (r.start_tag_owners || '')) ) || '-'}</td>
+                            <td style="white-space: pre-line;">${nl((confirmTags ? (() => {
+                                const cableOwners = parseIntLines(r.cable_owner_ids || '');
+                                const sIds = parseIntLines(r.start_tag_owner_ids || '');
+                                const eIds = parseIntLines(r.end_tag_owner_ids || '');
+                                const conf = confirmTagsByCables(cableOwners, sIds, eIds);
+                                return decorateTagsByIndexes(r.start_tag_owners || '', conf.startConfirmed);
+                            })() : (r.start_tag_owners || '')) ) || '-'}</td>
                             <td>
                                 <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
                                     <span>${esc(r.end_well_number || '-')}</span>
@@ -4313,14 +4330,13 @@ const App = {
                                 </div>
                             </td>
                             <td>${Number(r.end_inventory_cables || 0)}</td>
-                            <td style="white-space: pre-line;">${nl((confirmTags ? (decorateTags(r.end_tag_owners || '', r.end_tag_owner_ids || '', (() => {
-                                const c = uniqSet(parseCsvIds(r.cable_owner_ids || ''));
-                                const s = uniqSet(parseIds(r.start_tag_owner_ids || ''));
-                                const e = uniqSet(parseIds(r.end_tag_owner_ids || ''));
-                                const inter = new Set();
-                                for (const id of c) { if (s.has(id) && e.has(id)) inter.add(id); }
-                                return inter;
-                            })())) : (r.end_tag_owners || '')) ) || '-'}</td>
+                            <td style="white-space: pre-line;">${nl((confirmTags ? (() => {
+                                const cableOwners = parseIntLines(r.cable_owner_ids || '');
+                                const sIds = parseIntLines(r.start_tag_owner_ids || '');
+                                const eIds = parseIntLines(r.end_tag_owner_ids || '');
+                                const conf = confirmTagsByCables(cableOwners, sIds, eIds);
+                                return decorateTagsByIndexes(r.end_tag_owners || '', conf.endConfirmed);
+                            })() : (r.end_tag_owners || '')) ) || '-'}</td>
                             <td>${Number(r.unaccounted_cables || 0)}</td>
                             <td style="white-space: nowrap;">
                                 <button class="btn btn-sm btn-secondary" title="Показать на карте"
