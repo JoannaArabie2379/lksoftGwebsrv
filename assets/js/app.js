@@ -4250,6 +4250,7 @@ const App = {
             const endUsed = new Array(endTagOwnerIds.length).fill(false);
             const startConfirmed = new Set();
             const endConfirmed = new Set();
+            const cableConfirmed = new Set(); // idx of cable in list
 
             const findFirst = (arr, used, ownerId) => {
                 for (let i = 0; i < arr.length; i++) {
@@ -4260,7 +4261,8 @@ const App = {
             };
 
             // Важно: учитываем кратность кабелей (owner_id может повторяться в списке кабелей)
-            for (const oid of (cableOwnerIds || [])) {
+            for (let cIdx = 0; cIdx < (cableOwnerIds || []).length; cIdx++) {
+                const oid = (cableOwnerIds || [])[cIdx];
                 const ownerId = parseInt(oid || 0, 10);
                 if (!ownerId) continue;
                 const si = findFirst(startTagOwnerIds, startUsed, ownerId);
@@ -4270,9 +4272,10 @@ const App = {
                     endUsed[ei] = true;
                     startConfirmed.add(si);
                     endConfirmed.add(ei);
+                    cableConfirmed.add(cIdx);
                 }
             }
-            return { startConfirmed, endConfirmed };
+            return { startConfirmed, endConfirmed, cableConfirmed };
         };
 
         const decorateTagsByIndexes = (namesStr, confirmedIdxSet) => {
@@ -4281,6 +4284,16 @@ const App = {
             const out = names.map((name, idx) => {
                 if (confirmedIdxSet && confirmedIdxSet.has(idx)) return `(П) ${name}`;
                 return `${name} (НП)`;
+            });
+            return out.join('\n');
+        };
+
+        const decorateCablesByIndexes = (numbersStr, confirmedIdxSet) => {
+            const nums = parseLines(numbersStr);
+            if (!nums.length) return '';
+            const out = nums.map((num, idx) => {
+                if (confirmedIdxSet && confirmedIdxSet.has(idx)) return `(П) ${num}`;
+                return `${num} (НП)`;
             });
             return out.join('\n');
         };
@@ -4327,7 +4340,13 @@ const App = {
                             <td>${idx + 1}</td>
                             <td>${esc(r.direction_number || r.direction_id || '')}</td>
                             <td>${fmtLen(r.direction_length_m)}</td>
-                            <td style="white-space: pre-line;">${nl(r.cable_numbers || '') || '-'}</td>
+                            <td style="white-space: pre-line;">${nl((confirmTags ? (() => {
+                                const cableOwners = parseIntLines(r.cable_owner_ids || '');
+                                const sIds = parseIntLines(r.start_tag_owner_ids || '');
+                                const eIds = parseIntLines(r.end_tag_owner_ids || '');
+                                const conf = confirmTagsByCables(cableOwners, sIds, eIds);
+                                return decorateCablesByIndexes(r.cable_numbers || '', conf.cableConfirmed);
+                            })() : (r.cable_numbers || '')) || '-'}</td>
                             <td>
                                 <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
                                     <span>${esc(r.start_well_number || '-')}</span>
