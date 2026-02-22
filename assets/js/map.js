@@ -1925,7 +1925,7 @@ const MapManager = {
             if (!features.length) return;
 
             const routeColor = '#8300ff';
-            const routeOpacity = 87 / 255; // #8300ff57
+            const routeOpacity = 0.1;
             const baseWeight = Math.max(1, this.getDirectionLineWeight());
             const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             const fmt = (n) => {

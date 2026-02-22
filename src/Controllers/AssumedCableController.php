@@ -181,13 +181,12 @@ class AssumedCableController extends BaseController
 
         // helpers
         $weightFor = function(int $variantNo, float $lengthM): float {
-            // v1: max accuracy -> max length
-            // v2: balance -> prefer longer routes with more edges (edge bonus)
-            // v3: max coverage -> strong edge bonus (prefer consuming more edges)
-            $bonus = 0.0;
-            if ($variantNo === 2) $bonus = 50.0;
-            if ($variantNo === 3) $bonus = 5000.0;
-            return $lengthM + $bonus;
+            // ВАЖНО:
+            // Ранее v2/v3 добавляли большой "бонус за ребро", из-за чего алгоритм
+            // начинал предпочитать маршруты по множеству коротких направлений (ответвления->ответвления),
+            // что визуально выглядело как "малый граф -> малый граф".
+            // Для "магистраль сначала" вес ребра должен определяться в первую очередь длиной.
+            return $lengthM;
         };
 
         $deepCopySupply = function(array $s) {
