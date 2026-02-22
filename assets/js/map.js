@@ -105,7 +105,7 @@ const MapManager = {
     assumedCablesVariantNo: 1,
     assumedCablesPanelEl: null,
     _assumedCablesPanelSelectedKey: null,
-    _assumedDirLayerById: new Map(),
+    _assumedRouteLayerById: new Map(),
 
     // Линейка (измерение расстояний)
     rulerMode: false,
@@ -1873,17 +1873,14 @@ const MapManager = {
             if (!resp?.type || resp.type !== 'FeatureCollection' || !Array.isArray(resp.features)) return;
 
             this.layers.assumedCables?.clearLayers?.();
-            try { this._assumedDirLayerById = new Map(); } catch (_) {}
+            try { this._assumedRouteLayerById = new Map(); } catch (_) {}
             const features = resp.features.filter(f => f && f.geometry && f.geometry.type);
             if (!features.length) return;
 
             const baseWeight = Math.max(1, this.getDirectionLineWeight());
             const pickColor = (props) => {
-                const owners = Array.isArray(props?.owners) ? props.owners : [];
-                if (owners.length === 1) {
-                    const c = (owners[0]?.owner_color || '').toString().trim();
-                    if (c) return c;
-                }
+                const c = (props?.owner_color || '').toString().trim();
+                if (c) return c;
                 return this.colors.assumedCables || '#a855f7';
             };
 
@@ -1902,10 +1899,9 @@ const MapManager = {
                 onEachFeature: (feature, layer) => {
                     try {
                         const p = feature?.properties || {};
-                        const dirId = parseInt(p.direction_id || p.id || 0, 10);
-                        const num = (p.direction_number || p.number || '').toString();
-                        layer._igsMeta = { objectType: 'channel_direction', properties: { id: dirId, number: num } };
-                        if (dirId) this._assumedDirLayerById.set(dirId, layer);
+                        const routeId = parseInt(p.route_id || p.id || 0, 10);
+                        layer._igsMeta = { objectType: 'assumed_cable_route', properties: { id: routeId, ...p } };
+                        if (routeId) this._assumedRouteLayerById.set(routeId, layer);
                     } catch (_) {}
                 },
             }).addTo(this.layers.assumedCables);
@@ -1914,14 +1910,12 @@ const MapManager = {
         }
     },
 
-    highlightAssumedDirection(directionId) {
-        const id = parseInt(directionId || 0, 10);
+    highlightAssumedRoute(routeId) {
+        const id = parseInt(routeId || 0, 10);
         if (!id) return;
-        const layer = this._assumedDirLayerById?.get?.(id) || null;
+        const layer = this._assumedRouteLayerById?.get?.(id) || null;
         if (layer) {
             this.setSelectedLayer(layer);
-        } else {
-            this.highlightSelectedObject('channel_direction', id);
         }
     },
 
@@ -2013,15 +2007,15 @@ const MapManager = {
                     </thead>
                     <tbody>
                         ${rows.length ? rows.map((r, idx) => {
-                            const dirId = Number(r.direction_id || 0) || 0;
+                            const routeId = Number(r.route_id || 0) || 0;
                             const ownerName = (r.owner_name || '').toString().trim() || 'Не определён';
-                            const len = fmtNum(r.direction_length_m);
+                            const len = fmtNum(r.length_m);
                             const sw = (r.start_well_number || '').toString();
                             const ew = (r.end_well_number || '').toString();
-                            const key = `${dirId}|${String(r.owner_id ?? '')}`;
+                            const key = String(routeId);
                             const selected = (this._assumedCablesPanelSelectedKey === key) ? 'ac-row-selected' : '';
                             return `
-                                <tr class="${selected}" data-dir-id="${esc(dirId)}" data-key="${esc(key)}" title="Направление: ${esc(r.direction_number || '')}">
+                                <tr class="${selected}" data-route-id="${esc(routeId)}" data-key="${esc(key)}">
                                     <td>${idx + 1}</td>
                                     <td>${esc(ownerName)}</td>
                                     <td>${esc(len)}</td>
@@ -2061,16 +2055,22 @@ const MapManager = {
             });
         } catch (_) {}
 
-        // row click -> highlight + fly to direction
+        // row click -> highlight + fit to route
         try {
-            el.querySelectorAll('tbody tr[data-dir-id]').forEach((tr) => {
+            el.querySelectorAll('tbody tr[data-route-id]').forEach((tr) => {
                 tr.addEventListener('click', async () => {
-                    const dirId = parseInt(tr.getAttribute('data-dir-id') || '0', 10);
+                    const routeId = parseInt(tr.getAttribute('data-route-id') || '0', 10);
                     const key = tr.getAttribute('data-key') || '';
-                    if (!dirId) return;
+                    if (!routeId) return;
                     this._assumedCablesPanelSelectedKey = key;
-                    try { this.highlightAssumedDirection?.(dirId); } catch (_) {}
-                    try { await this.showObjectOnMap('channel_direction', dirId); } catch (_) {}
+                    try { this.highlightAssumedRoute?.(routeId); } catch (_) {}
+                    try {
+                        const layer = this._assumedRouteLayerById?.get?.(routeId) || null;
+                        const b = layer?.getBounds?.();
+                        if (b && b.isValid && b.isValid()) {
+                            this.fitToBounds(b, 17);
+                        }
+                    } catch (_) {}
                     try { this.renderAssumedCablesPanel(payload); } catch (_) {}
                 });
             });
