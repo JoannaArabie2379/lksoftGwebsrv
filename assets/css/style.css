@@ -804,6 +804,11 @@ body.assumed-cables-panel-open .modal.modal-bottom-right {
     padding-right: calc(12px + var(--assumed-cables-panel-w, 520px) + 12px);
 }
 
+/* Object info panel (top-right) should not be covered by assumed cables panel */
+body.assumed-cables-panel-open .info-panel {
+    right: calc(10px + var(--assumed-cables-panel-w, 520px) + 12px);
+}
+
 .assumed-cables-panel.hidden {
     display: none;
 }

@@ -455,23 +455,23 @@ class AssumedCableController extends BaseController
                 return $bestPath;
             };
 
-            $buildComponents = function(array $rem) use ($dirs): array {
-                // компоненты считаем по рёбрам с остатком > 0 (неучтённые)
+            $buildAllComponents = function(array $dirs, array $rem) use ($weightFor, $variantNo): array {
+                // Компоненты считаем по ВСЕЙ сети направлений (а не только по rem>0),
+                // чтобы приоритет "магистрального" графа учитывал полную топологию.
                 $adj = []; // wellId => [ [toWellId, dirId], ...]
-                foreach ($rem as $dirId => $cap) {
-                    $cap = (int) $cap;
-                    if ($cap <= 0) continue;
-                    $d = $dirs[(int) $dirId] ?? null;
-                    if (!$d) continue;
+                foreach ($dirs as $dirId => $d) {
+                    $dirId = (int) $dirId;
+                    if ($dirId <= 0) continue;
                     $a = (int) ($d['a'] ?? 0);
                     $b = (int) ($d['b'] ?? 0);
                     if ($a <= 0 || $b <= 0) continue;
                     if (!isset($adj[$a])) $adj[$a] = [];
                     if (!isset($adj[$b])) $adj[$b] = [];
-                    $adj[$a][] = [$b, (int) $dirId];
-                    $adj[$b][] = [$a, (int) $dirId];
+                    $adj[$a][] = [$b, $dirId];
+                    $adj[$b][] = [$a, $dirId];
                 }
                 if (!$adj) return [];
+
                 $visited = [];
                 $components = [];
                 foreach (array_keys($adj) as $start) {
@@ -479,51 +479,56 @@ class AssumedCableController extends BaseController
                     if (isset($visited[$start])) continue;
                     $stack = [$start];
                     $visited[$start] = true;
-                    $dirSet = [];
+                    $dirAll = [];
                     while ($stack) {
                         $u = (int) array_pop($stack);
                         foreach (($adj[$u] ?? []) as $e) {
                             $v = (int) ($e[0] ?? 0);
                             $dirId = (int) ($e[1] ?? 0);
-                            if ($dirId > 0) $dirSet[$dirId] = true;
+                            if ($dirId > 0) $dirAll[$dirId] = true;
                             if ($v > 0 && !isset($visited[$v])) {
                                 $visited[$v] = true;
                                 $stack[] = $v;
                             }
                         }
                     }
-                    if ($dirSet) {
-                        $components[] = ['dir_ids' => array_keys($dirSet)];
+                    if (!$dirAll) continue;
+
+                    $dirIdsAll = array_keys($dirAll);
+                    $dirIdsRem = [];
+                    foreach ($dirIdsAll as $dirId) {
+                        $dirId = (int) $dirId;
+                        if ((int) ($rem[$dirId] ?? 0) > 0) $dirIdsRem[] = $dirId;
                     }
+                    if (!$dirIdsRem) continue; // в этой компоненте нечего расходовать
+
+                    $sumAll = 0.0;
+                    foreach ($dirIdsAll as $dirId) {
+                        $d = $dirs[(int) $dirId] ?? null;
+                        if (!$d) continue;
+                        $sumAll += (float) $weightFor($variantNo, (float) ($d['length_m'] ?? 0));
+                    }
+
+                    $components[] = [
+                        'dir_ids_all' => $dirIdsAll,
+                        'dir_ids_rem' => $dirIdsRem,
+                        'weight' => $sumAll,
+                    ];
                 }
+
+                usort($components, fn($x, $y) => ((float) ($y['weight'] ?? 0) <=> (float) ($x['weight'] ?? 0)));
                 return $components;
             };
 
-            // ВАЖНО: сначала обрабатываем компоненты сети по убыванию "веса" (длины),
-            // и вырабатываем ресурс (неучтённые отрезки) внутри компоненты до конца, только потом переходим к следующей.
-            $components = $buildComponents($rem);
-            foreach ($components as &$c) {
-                // Вес графа = суммарная длина направлений, где есть неучтённые (rem>0).
-                // Это ближе к ожиданию "самый длинный граф => самый большой вес".
-                $sum = 0.0;
-                foreach (($c['dir_ids'] ?? []) as $dirId) {
-                    $dirId = (int) $dirId;
-                    if ($dirId <= 0) continue;
-                    if (!isset($rem[$dirId]) || (int) $rem[$dirId] <= 0) continue;
-                    $d = $dirs[$dirId] ?? null;
-                    if (!$d) continue;
-                    $sum += (float) $weightFor($variantNo, (float) ($d['length_m'] ?? 0));
-                }
-                $c['weight'] = $sum;
-            }
-            unset($c);
-            usort($components, fn($x, $y) => ((float) ($y['weight'] ?? 0) <=> (float) ($x['weight'] ?? 0)));
+            // ВАЖНО: приоритет компонент (графов) считаем по всей сети, а расходуем только rem>0.
+            // Внутри каждой компоненты вырабатываем rem полностью и только потом переходим к следующей.
+            $components = $buildAllComponents($dirs, $rem);
 
             foreach ($components as $c) {
-                $dirIds = $c['dir_ids'] ?? [];
-                if (!$dirIds) continue;
+                $dirIdsRem = $c['dir_ids_rem'] ?? [];
+                if (!$dirIdsRem) continue;
                 while (true) {
-                    $edges = $buildEdges($rem, $dirIds);
+                    $edges = $buildEdges($rem, $dirIdsRem);
                     if (!$edges) break;
                     $bestPath = $bestPathForEdges($edges);
                     if ($bestPath === null) {
@@ -874,7 +879,9 @@ class AssumedCableController extends BaseController
         if (!in_array($variantNo, [1, 2, 3], true)) $variantNo = 1;
         $delimiter = (string) $this->request->query('delimiter', ';');
         if ($delimiter === '') $delimiter = ';';
-        $delimiter = mb_substr($delimiter, 0, 1);
+        // mbstring может быть не установлен на сервере -> не используем mb_substr()
+        $delimiter = substr($delimiter, 0, 1);
+        if ($delimiter === '' || $delimiter === false) $delimiter = ';';
 
         // reuse list logic (без дублирования ошибок в 500)
         // если таблиц нет — пустой файл
