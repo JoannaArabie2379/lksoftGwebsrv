@@ -492,14 +492,14 @@ body.sidebar-resizing {
     flex: 0 0 12px;
 }
 
-.layer-item.layer-item-wrap {
-    align-items: flex-start;
-}
-
 .layer-title-wrap {
     white-space: normal !important;
     overflow: visible !important;
     text-overflow: unset !important;
+}
+
+.layer-item.layer-item-with-controls {
+    flex-wrap: wrap;
 }
 
 .layer-inline-btn {
