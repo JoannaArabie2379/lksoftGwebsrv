@@ -679,5 +679,200 @@ class AssumedCableController extends BaseController
             'built_at' => (string) ($sc['built_at'] ?? ''),
         ]);
     }
+
+    /**
+     * GET /api/assumed-cables/list?variant=1
+     * Данные для правой панели: строки (direction x owner) + сводные счётчики.
+     */
+    public function list(): void
+    {
+        $variantNo = (int) $this->request->query('variant', 1);
+        if (!in_array($variantNo, [1, 2, 3], true)) $variantNo = 1;
+
+        // если таблиц нет — вернуть пустой результат
+        try {
+            $this->db->fetch("SELECT 1 FROM assumed_cable_scenarios LIMIT 1");
+        } catch (\Throwable $e) {
+            Response::success([
+                'variant_no' => $variantNo,
+                'scenario_id' => null,
+                'built_at' => null,
+                'summary' => [
+                    'used_unaccounted' => 0,
+                    'total_unaccounted' => 0,
+                    'assumed_total' => 0,
+                    'rows' => 0,
+                ],
+                'rows' => [],
+            ]);
+        }
+
+        $sc = $this->db->fetch(
+            "SELECT id, variant_no, built_at
+             FROM assumed_cable_scenarios
+             WHERE variant_no = :v
+             ORDER BY id DESC
+             LIMIT 1",
+            ['v' => $variantNo]
+        );
+        if (!$sc) {
+            Response::success([
+                'variant_no' => $variantNo,
+                'scenario_id' => null,
+                'built_at' => null,
+                'summary' => [
+                    'used_unaccounted' => 0,
+                    'total_unaccounted' => 0,
+                    'assumed_total' => 0,
+                    'rows' => 0,
+                ],
+                'rows' => [],
+            ]);
+        }
+
+        $scenarioId = (int) ($sc['id'] ?? 0);
+        if ($scenarioId <= 0) {
+            Response::success([
+                'variant_no' => $variantNo,
+                'scenario_id' => null,
+                'built_at' => (string) ($sc['built_at'] ?? ''),
+                'summary' => [
+                    'used_unaccounted' => 0,
+                    'total_unaccounted' => 0,
+                    'assumed_total' => 0,
+                    'rows' => 0,
+                ],
+                'rows' => [],
+            ]);
+        }
+
+        $rows = $this->db->fetchAll(
+            "SELECT
+                ac.direction_id,
+                cd.number AS direction_number,
+                COALESCE(cd.length_m, ROUND(ST_Length(cd.geom_wgs84::geography)::numeric, 2), 0)::numeric AS direction_length_m,
+                sw.number AS start_well_number,
+                ew.number AS end_well_number,
+                ac.owner_id,
+                COALESCE(o.name, '') AS owner_name,
+                ac.assumed_count,
+                ac.confidence
+             FROM assumed_cables ac
+             JOIN channel_directions cd ON cd.id = ac.direction_id
+             LEFT JOIN wells sw ON cd.start_well_id = sw.id
+             LEFT JOIN wells ew ON cd.end_well_id = ew.id
+             LEFT JOIN owners o ON ac.owner_id = o.id
+             WHERE ac.scenario_id = :sid
+             ORDER BY cd.number, COALESCE(o.name, '')",
+            ['sid' => $scenarioId]
+        );
+
+        $summary = $this->db->fetch(
+            "WITH sc_rows AS (
+                SELECT direction_id, owner_id, assumed_count
+                FROM assumed_cables
+                WHERE scenario_id = :sid
+            ),
+            dirs AS (
+                SELECT DISTINCT direction_id FROM sc_rows
+            )
+            SELECT
+                (SELECT COALESCE(SUM(CASE WHEN owner_id IS NOT NULL THEN assumed_count ELSE 0 END), 0)::int FROM sc_rows) AS used_unaccounted,
+                (SELECT COALESCE(SUM(assumed_count), 0)::int FROM sc_rows) AS assumed_total,
+                (SELECT COALESCE(SUM(COALESCE(s.unaccounted_cables, 0)), 0)::int
+                 FROM dirs d
+                 LEFT JOIN inventory_summary s ON s.direction_id = d.direction_id
+                ) AS total_unaccounted,
+                (SELECT COUNT(*)::int FROM sc_rows) AS rows",
+            ['sid' => $scenarioId]
+        ) ?? [];
+
+        Response::success([
+            'variant_no' => $variantNo,
+            'scenario_id' => $scenarioId,
+            'built_at' => (string) ($sc['built_at'] ?? ''),
+            'summary' => [
+                'used_unaccounted' => (int) ($summary['used_unaccounted'] ?? 0),
+                'total_unaccounted' => (int) ($summary['total_unaccounted'] ?? 0),
+                'assumed_total' => (int) ($summary['assumed_total'] ?? 0),
+                'rows' => (int) ($summary['rows'] ?? 0),
+            ],
+            'rows' => $rows,
+        ]);
+    }
+
+    /**
+     * GET /api/assumed-cables/export?variant=1&delimiter=;
+     */
+    public function export(): void
+    {
+        $variantNo = (int) $this->request->query('variant', 1);
+        if (!in_array($variantNo, [1, 2, 3], true)) $variantNo = 1;
+        $delimiter = (string) $this->request->query('delimiter', ';');
+        if ($delimiter === '') $delimiter = ';';
+        $delimiter = mb_substr($delimiter, 0, 1);
+
+        // reuse list logic (без дублирования ошибок в 500)
+        // если таблиц нет — пустой файл
+        $sc = null;
+        try {
+            $sc = $this->db->fetch(
+                "SELECT id, built_at FROM assumed_cable_scenarios WHERE variant_no = :v ORDER BY id DESC LIMIT 1",
+                ['v' => $variantNo]
+            );
+        } catch (\Throwable $e) {
+            $sc = null;
+        }
+
+        $rows = [];
+        if ($sc && (int) ($sc['id'] ?? 0) > 0) {
+            $scenarioId = (int) $sc['id'];
+            $rows = $this->db->fetchAll(
+                "SELECT
+                    cd.number AS direction_number,
+                    COALESCE(o.name, 'Не определён') AS owner_name,
+                    ac.assumed_count,
+                    ac.confidence,
+                    COALESCE(cd.length_m, ROUND(ST_Length(cd.geom_wgs84::geography)::numeric, 2), 0)::numeric AS direction_length_m,
+                    sw.number AS start_well_number,
+                    ew.number AS end_well_number
+                 FROM assumed_cables ac
+                 JOIN channel_directions cd ON cd.id = ac.direction_id
+                 LEFT JOIN wells sw ON cd.start_well_id = sw.id
+                 LEFT JOIN wells ew ON cd.end_well_id = ew.id
+                 LEFT JOIN owners o ON ac.owner_id = o.id
+                 WHERE ac.scenario_id = :sid
+                 ORDER BY cd.number, owner_name",
+                ['sid' => $scenarioId]
+            );
+        }
+
+        $filename = 'assumed_cables_v' . $variantNo . '_' . date('Y-m-d') . '.csv';
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+
+        $output = fopen('php://output', 'w');
+        fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+
+        $headers = ['№', 'Вариант', 'Номер направления', 'Собственник', 'Количество', 'Уверенность', 'Длина (м)', 'Начальный колодец', 'Конечный колодец'];
+        fputcsv($output, $headers, $delimiter);
+        $i = 1;
+        foreach ($rows as $r) {
+            fputcsv($output, [
+                $i++,
+                $variantNo,
+                (string) ($r['direction_number'] ?? ''),
+                (string) ($r['owner_name'] ?? ''),
+                (string) ($r['assumed_count'] ?? 0),
+                (string) ($r['confidence'] ?? ''),
+                (string) ($r['direction_length_m'] ?? 0),
+                (string) ($r['start_well_number'] ?? ''),
+                (string) ($r['end_well_number'] ?? ''),
+            ], $delimiter);
+        }
+
+        fclose($output);
+        exit;
+    }
 }
 

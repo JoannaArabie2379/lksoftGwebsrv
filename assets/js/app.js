@@ -261,6 +261,17 @@ const App = {
             this.settings = {};
         }
 
+        // Персональная ширина левого сайдбара
+        try {
+            const fromSettings = (this.settings?.sidebar_width ?? '').toString().trim();
+            const fromLocal = (localStorage.getItem('igs_sidebar_width') || '').toString().trim();
+            const raw = fromSettings || fromLocal;
+            const w = parseInt(raw || '', 10);
+            if (Number.isFinite(w) && w >= 220 && w <= 1200) {
+                document.documentElement.style.setProperty('--sidebar-width', `${w}px`);
+            }
+        } catch (_) {}
+
         // Применяем на MapManager дефолтные центр/зум
         const z = parseInt(this.settings.map_default_zoom, 10);
         const lat = parseFloat(this.settings.map_default_lat);
@@ -444,6 +455,7 @@ const App = {
                 try {
                     const cb = document.getElementById('layer-assumed-cables');
                     if (cb?.checked) MapManager.loadAssumedCablesLayer?.();
+                    if (cb?.checked) MapManager.refreshAssumedCablesPanel?.();
                 } catch (_) {}
             });
         }
@@ -454,6 +466,9 @@ const App = {
             } catch (_) {}
             this.rebuildAssumedCables();
         });
+
+        // Ресайз левого сайдбара (drag по кромке у карты)
+        this.initSidebarResize?.();
 
         // Фильтры (авто-применение при выборе)
         ['filter-group', 'filter-owner', 'filter-status', 'filter-contract'].forEach((id) => {
@@ -1199,6 +1214,14 @@ const App = {
         const layerName = layerMap[input.id];
         if (!layerName) return;
 
+        // Предполагаемые кабели: при включении показываем правую панель, при выключении скрываем
+        if (input.id === 'layer-assumed-cables') {
+            try {
+                MapManager.setAssumedCablesPanelVisible?.(!!input.checked);
+                if (input.checked) MapManager.refreshAssumedCablesPanel?.();
+            } catch (_) {}
+        }
+
         // Инвентаризация: при включении автоматически выключаем все слои,
         // оставляем "Колодцы" и "Инвентаризация". Слой инвентаризации ниже колодцев.
         if (input.id === 'layer-inventory' && input.checked) {
@@ -1225,6 +1248,12 @@ const App = {
             set('layer-duct-cables', 'ductCables', false);
             this.saveLayerPreferencesDebounced();
             return;
+        }
+
+        // если выключили слой предполагаемых кабелей — сбрасываем выделение и закрываем панель
+        if (input.id === 'layer-assumed-cables' && !input.checked) {
+            try { MapManager.clearSelectedObject?.(); } catch (_) {}
+            try { MapManager.setAssumedCablesPanelVisible?.(false); } catch (_) {}
         }
 
         // если выключили слой инвентаризации — прячем кнопку подсказок
@@ -2084,11 +2113,86 @@ const App = {
                 const cb = document.getElementById('layer-assumed-cables');
                 if (cb?.checked) {
                     MapManager.loadAssumedCablesLayer?.();
+                    MapManager.refreshAssumedCablesPanel?.();
                 }
             } catch (_) {}
         } catch (e) {
             this.notify(e?.message || 'Ошибка пересчёта', 'error');
         }
+    },
+
+    initSidebarResize() {
+        try {
+            if (this._sidebarResizeBound) return;
+            this._sidebarResizeBound = true;
+        } catch (_) {}
+
+        const sidebar = document.querySelector('.sidebar');
+        const handle = document.getElementById('sidebar-resizer');
+        if (!sidebar || !handle) return;
+
+        // На узких экранах (мобильное меню) ресайз отключаем
+        const isMobile = () => window.innerWidth <= 768;
+
+        const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+        const applyWidth = (w) => {
+            document.documentElement.style.setProperty('--sidebar-width', `${w}px`);
+            try { localStorage.setItem('igs_sidebar_width', String(w)); } catch (_) {}
+            try { MapManager?.map?.invalidateSize?.({ pan: false, animate: false }); } catch (_) {}
+        };
+
+        let dragging = false;
+        let startX = 0;
+        let startW = 0;
+        let lastW = null;
+
+        const onMove = (e) => {
+            if (!dragging) return;
+            const dx = (e?.clientX ?? 0) - startX;
+            const minW = 240;
+            const maxW = Math.min(900, Math.floor(window.innerWidth * 0.7));
+            const w = clamp(Math.round(startW + dx), minW, maxW);
+            if (lastW === w) return;
+            lastW = w;
+            applyWidth(w);
+        };
+
+        const onUp = async () => {
+            if (!dragging) return;
+            dragging = false;
+            document.body.classList.remove('sidebar-resizing');
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+
+            // Сохраняем в персональные настройки (один раз по окончании drag)
+            try {
+                const w = lastW;
+                if (Number.isFinite(w) && w >= 220) {
+                    const resp = await API.settings.update({ sidebar_width: String(w) });
+                    if (resp?.success !== false) {
+                        this.settings.sidebar_width = String(w);
+                    }
+                }
+            } catch (_) {
+                // ignore
+            }
+        };
+
+        handle.addEventListener('mousedown', (e) => {
+            if (isMobile()) return;
+            if (e.button !== 0) return;
+            try { e.preventDefault(); } catch (_) {}
+
+            dragging = true;
+            document.body.classList.add('sidebar-resizing');
+            const rect = sidebar.getBoundingClientRect();
+            startW = rect.width;
+            startX = e.clientX;
+            lastW = Math.round(startW);
+
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        });
     },
 
     async loadObjectsListFilters(tab) {
@@ -7670,6 +7774,14 @@ const App = {
             }
 
             return API.reports.export(type, params, delimiter);
+        });
+    },
+
+    showAssumedCablesExportModal() {
+        const v = (typeof MapManager !== 'undefined' && MapManager?.assumedCablesVariantNo) ? MapManager.assumedCablesVariantNo : 1;
+        const vv = [1, 2, 3].includes(Number(v)) ? Number(v) : 1;
+        this.showCsvDelimiterModal('Выгрузить (предполагаемые кабели)', (delimiter) => {
+            return API.assumedCables.export(vv, delimiter);
         });
     },
 

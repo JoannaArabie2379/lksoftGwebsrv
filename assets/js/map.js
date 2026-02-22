@@ -103,6 +103,9 @@ const MapManager = {
 
     // Предполагаемые кабели (слой)
     assumedCablesVariantNo: 1,
+    assumedCablesPanelEl: null,
+    _assumedCablesPanelSelectedKey: null,
+    _assumedDirLayerById: new Map(),
 
     // Цвета для слоёв
     colors: {
@@ -508,6 +511,24 @@ const MapManager = {
                     el.addEventListener('wheel', (e) => {
                         try { e.stopPropagation(); } catch (_) {}
                     }, { passive: true });
+                } catch (_) {}
+            }
+        } catch (_) {}
+
+        // Панель "Предполагаемые кабели" (DOM overlay поверх карты, справа)
+        try {
+            const host = this.map.getContainer?.();
+            if (host) {
+                const el = document.createElement('div');
+                el.id = 'assumed-cables-panel';
+                el.className = 'assumed-cables-panel hidden';
+                host.appendChild(el);
+                this.assumedCablesPanelEl = el;
+                try {
+                    if (typeof L !== 'undefined' && L?.DomEvent) {
+                        L.DomEvent.disableScrollPropagation(el);
+                        L.DomEvent.disableClickPropagation(el);
+                    }
                 } catch (_) {}
             }
         } catch (_) {}
@@ -1565,6 +1586,7 @@ const MapManager = {
             if (!resp?.type || resp.type !== 'FeatureCollection' || !Array.isArray(resp.features)) return;
 
             this.layers.assumedCables?.clearLayers?.();
+            try { this._assumedDirLayerById = new Map(); } catch (_) {}
             const features = resp.features.filter(f => f && f.geometry && f.geometry.type);
             if (!features.length) return;
 
@@ -1590,10 +1612,182 @@ const MapManager = {
                         dashArray: '6, 6',
                     };
                 },
+                onEachFeature: (feature, layer) => {
+                    try {
+                        const p = feature?.properties || {};
+                        const dirId = parseInt(p.direction_id || p.id || 0, 10);
+                        const num = (p.direction_number || p.number || '').toString();
+                        layer._igsMeta = { objectType: 'channel_direction', properties: { id: dirId, number: num } };
+                        if (dirId) this._assumedDirLayerById.set(dirId, layer);
+                    } catch (_) {}
+                },
             }).addTo(this.layers.assumedCables);
         } catch (e) {
             console.error('Ошибка загрузки предполагаемых кабелей:', e);
         }
+    },
+
+    highlightAssumedDirection(directionId) {
+        const id = parseInt(directionId || 0, 10);
+        if (!id) return;
+        const layer = this._assumedDirLayerById?.get?.(id) || null;
+        if (layer) {
+            this.setSelectedLayer(layer);
+        } else {
+            this.highlightSelectedObject('channel_direction', id);
+        }
+    },
+
+    assumedVariantLabel(v) {
+        const vv = [1, 2, 3].includes(Number(v)) ? Number(v) : 1;
+        if (vv === 1) return '1 — Максимальная точность';
+        if (vv === 2) return '2 — Баланс точность/покрытие';
+        return '3 — Максимальное покрытие';
+    },
+
+    setAssumedCablesPanelVisible(visible) {
+        try {
+            const el = this.assumedCablesPanelEl;
+            if (!el) return;
+            el.classList.toggle('hidden', !visible);
+            if (!visible) {
+                this._assumedCablesPanelSelectedKey = null;
+            }
+        } catch (_) {}
+    },
+
+    async refreshAssumedCablesPanel() {
+        const el = this.assumedCablesPanelEl;
+        if (!el || el.classList.contains('hidden')) return;
+        const v = [1, 2, 3].includes(Number(this.assumedCablesVariantNo)) ? Number(this.assumedCablesVariantNo) : 1;
+        try {
+            const resp = await API.assumedCables.list(v);
+            if (resp?.success === false) throw new Error(resp?.message || 'Ошибка');
+            const data = resp?.data || resp;
+            this.renderAssumedCablesPanel(data);
+        } catch (e) {
+            this.renderAssumedCablesPanel({
+                variant_no: v,
+                scenario_id: null,
+                built_at: null,
+                summary: { used_unaccounted: 0, total_unaccounted: 0, assumed_total: 0, rows: 0 },
+                rows: [],
+                _error: e?.message || 'Ошибка загрузки',
+            });
+        }
+    },
+
+    renderAssumedCablesPanel(payload) {
+        const el = this.assumedCablesPanelEl;
+        if (!el) return;
+        const v = [1, 2, 3].includes(Number(payload?.variant_no)) ? Number(payload.variant_no) : ([1, 2, 3].includes(Number(this.assumedCablesVariantNo)) ? Number(this.assumedCablesVariantNo) : 1);
+        const summary = payload?.summary || {};
+        const used = Number(summary.used_unaccounted || 0) || 0;
+        const total = Number(summary.total_unaccounted || 0) || 0;
+        const assumedTotal = Number(summary.assumed_total || 0) || 0;
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+
+        const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const fmtNum = (n) => {
+            const x = Number(n);
+            if (!Number.isFinite(x)) return '-';
+            return String(Math.round(x * 100) / 100);
+        };
+
+        const title = `Предполагаемые кабели - ${this.assumedVariantLabel(v)}`;
+        const err = payload?._error ? `<span style="color: var(--danger-color);">${esc(payload._error)}</span>` : '';
+
+        el.innerHTML = `
+            <div class="ac-header">
+                <div class="ac-title" title="${esc(title)}">${esc(title)}</div>
+                <button type="button" class="ac-close" id="btn-ac-close" title="Закрыть">✕</button>
+            </div>
+            <div class="ac-sub">
+                <div>
+                    <div><b>${used}|${total}</b> использовано|всего неучтенных</div>
+                    <div>предположено кабелей <b>${assumedTotal}</b>${err ? ` — ${err}` : ''}</div>
+                </div>
+                <div class="ac-actions">
+                    <button type="button" class="btn btn-sm btn-secondary" id="btn-ac-export">
+                        <i class="fas fa-file-export"></i> Выгрузить
+                    </button>
+                </div>
+            </div>
+            <div class="ac-body">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:50px;">№</th>
+                            <th style="width:180px;">Собственник</th>
+                            <th style="width:90px;">Длина (м)</th>
+                            <th>Колодец нач.</th>
+                            <th>Колодец кон.</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.length ? rows.map((r, idx) => {
+                            const dirId = Number(r.direction_id || 0) || 0;
+                            const ownerName = (r.owner_name || '').toString().trim() || 'Не определён';
+                            const len = fmtNum(r.direction_length_m);
+                            const sw = (r.start_well_number || '').toString();
+                            const ew = (r.end_well_number || '').toString();
+                            const key = `${dirId}|${String(r.owner_id ?? '')}`;
+                            const selected = (this._assumedCablesPanelSelectedKey === key) ? 'ac-row-selected' : '';
+                            return `
+                                <tr class="${selected}" data-dir-id="${esc(dirId)}" data-key="${esc(key)}" title="Направление: ${esc(r.direction_number || '')}">
+                                    <td>${idx + 1}</td>
+                                    <td>${esc(ownerName)}</td>
+                                    <td>${esc(len)}</td>
+                                    <td>${esc(sw)}</td>
+                                    <td>${esc(ew)}</td>
+                                </tr>
+                            `;
+                        }).join('') : `
+                            <tr><td colspan="5" style="color: var(--text-secondary);">Нет данных. Нажмите “Пересчитать” в слое “Предполагаемые кабели”.</td></tr>
+                        `}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        // close: снять галочку слоя
+        try {
+            el.querySelector('#btn-ac-close')?.addEventListener('click', () => {
+                try {
+                    const cb = document.getElementById('layer-assumed-cables');
+                    if (cb) {
+                        cb.checked = false;
+                        cb.dispatchEvent(new Event('change'));
+                    } else {
+                        this.setAssumedCablesPanelVisible(false);
+                    }
+                } catch (_) {
+                    this.setAssumedCablesPanelVisible(false);
+                }
+            });
+        } catch (_) {}
+
+        // export
+        try {
+            el.querySelector('#btn-ac-export')?.addEventListener('click', () => {
+                try { App?.showAssumedCablesExportModal?.(); } catch (_) {}
+            });
+        } catch (_) {}
+
+        // row click -> highlight + fly to direction
+        try {
+            el.querySelectorAll('tbody tr[data-dir-id]').forEach((tr) => {
+                tr.addEventListener('click', async () => {
+                    const dirId = parseInt(tr.getAttribute('data-dir-id') || '0', 10);
+                    const key = tr.getAttribute('data-key') || '';
+                    if (!dirId) return;
+                    this._assumedCablesPanelSelectedKey = key;
+                    try { this.highlightAssumedDirection?.(dirId); } catch (_) {}
+                    try { await this.showObjectOnMap('channel_direction', dirId); } catch (_) {}
+                    try { this.renderAssumedCablesPanel(payload); } catch (_) {}
+                });
+            });
+        } catch (_) {}
     },
 
     /**

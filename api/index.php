@@ -271,7 +271,9 @@ $router->post('/api/inventory/recalculate-unaccounted', [InventoryCardController
 // Предполагаемые кабели (3 варианта)
 // ========================
 $router->post('/api/assumed-cables/rebuild', [AssumedCableController::class, 'rebuild'], ['auth']);
+$router->get('/api/assumed-cables/list', [AssumedCableController::class, 'list'], ['auth']);
 $router->get('/api/assumed-cables/geojson', [AssumedCableController::class, 'geojson'], ['auth']);
+$router->get('/api/assumed-cables/export', [AssumedCableController::class, 'export'], ['auth']);
 
 // Столбики
 $router->get('/api/marker-posts', [MarkerPostController::class, 'index'], ['auth']);

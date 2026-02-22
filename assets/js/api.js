@@ -886,8 +886,14 @@ const API = {
         rebuild() {
             return API.post('/assumed-cables/rebuild', {});
         },
+        list(variantNo = 1) {
+            return API.get('/assumed-cables/list', { variant: variantNo });
+        },
         geojson(variantNo = 1) {
             return API.get('/assumed-cables/geojson', { variant: variantNo });
+        },
+        export(variantNo = 1, delimiter = ';') {
+            return API.download('/assumed-cables/export', { variant: variantNo, delimiter });
         },
     },
 };
