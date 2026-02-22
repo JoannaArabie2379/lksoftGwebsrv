@@ -35,12 +35,16 @@ class AssumedCableController extends BaseController
                     cd.number,
                     cd.start_well_id,
                     cd.end_well_id,
-                    COALESCE(cd.length_m, ROUND(ST_Length(cd.geom_wgs84::geography)::numeric, 2), 0)::numeric AS length_m,
-                    ST_AsGeoJSON(cd.geom_wgs84)::text AS geom
+                    COALESCE(
+                        cd.length_m,
+                        ROUND(ST_Length(COALESCE(cd.geom_wgs84, ST_Transform(cd.geom_msk86, 4326))::geography)::numeric, 2),
+                        0
+                    )::numeric AS length_m,
+                    ST_AsGeoJSON(COALESCE(cd.geom_wgs84, ST_Transform(cd.geom_msk86, 4326)))::text AS geom
              FROM channel_directions cd
              WHERE cd.start_well_id IS NOT NULL
                AND cd.end_well_id IS NOT NULL
-               AND cd.geom_wgs84 IS NOT NULL"
+               AND (cd.geom_wgs84 IS NOT NULL OR cd.geom_msk86 IS NOT NULL)"
         );
 
         $dirs = []; // dirId => {a,b,length_m,geom_coords,number}
@@ -499,9 +503,18 @@ class AssumedCableController extends BaseController
             // и вырабатываем ресурс (неучтённые отрезки) внутри компоненты до конца, только потом переходим к следующей.
             $components = $buildComponents($rem);
             foreach ($components as &$c) {
-                $edges0 = $buildEdges($rem, $c['dir_ids'] ?? []);
-                $bp0 = $bestPathForEdges($edges0);
-                $c['weight'] = (float) ($bp0['weight'] ?? 0);
+                // Вес графа = суммарная длина направлений, где есть неучтённые (rem>0).
+                // Это ближе к ожиданию "самый длинный граф => самый большой вес".
+                $sum = 0.0;
+                foreach (($c['dir_ids'] ?? []) as $dirId) {
+                    $dirId = (int) $dirId;
+                    if ($dirId <= 0) continue;
+                    if (!isset($rem[$dirId]) || (int) $rem[$dirId] <= 0) continue;
+                    $d = $dirs[$dirId] ?? null;
+                    if (!$d) continue;
+                    $sum += (float) $weightFor($variantNo, (float) ($d['length_m'] ?? 0));
+                }
+                $c['weight'] = $sum;
             }
             unset($c);
             usort($components, fn($x, $y) => ((float) ($y['weight'] ?? 0) <=> (float) ($x['weight'] ?? 0)));

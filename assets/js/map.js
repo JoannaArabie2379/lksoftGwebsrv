@@ -104,6 +104,7 @@ const MapManager = {
     // Предполагаемые кабели (слой)
     assumedCablesVariantNo: 1,
     assumedCablesPanelEl: null,
+    assumedSegmentPickerEl: null,
     _assumedCablesPanelSelectedKey: null,
     _assumedRouteLayerById: new Map(),
     _assumedRoutesById: new Map(), // route_id -> { ...row, _index, _direction_ids[] }
@@ -561,6 +562,24 @@ const MapManager = {
                 el.className = 'assumed-cables-panel hidden';
                 host.appendChild(el);
                 this.assumedCablesPanelEl = el;
+                try {
+                    if (typeof L !== 'undefined' && L?.DomEvent) {
+                        L.DomEvent.disableScrollPropagation(el);
+                        L.DomEvent.disableClickPropagation(el);
+                    }
+                } catch (_) {}
+            }
+        } catch (_) {}
+
+        // Окно выбора предполагаемых кабелей по участку (нижний центр)
+        try {
+            const host = this.map.getContainer?.();
+            if (host) {
+                const el = document.createElement('div');
+                el.id = 'assumed-segment-picker';
+                el.className = 'assumed-segment-picker hidden';
+                host.appendChild(el);
+                this.assumedSegmentPickerEl = el;
                 try {
                     if (typeof L !== 'undefined' && L?.DomEvent) {
                         L.DomEvent.disableScrollPropagation(el);
@@ -2026,44 +2045,42 @@ const MapManager = {
                     .sort((a, b) => (a._index || 0) - (b._index || 0));
                 if (!items.length) return;
 
-                const box = document.createElement('div');
-                box.style.maxHeight = '260px';
-                box.style.overflow = 'auto';
-                box.style.fontSize = '12px';
-                box.style.lineHeight = '1.4';
+                const host = this.assumedSegmentPickerEl;
+                if (!host) return;
+                host.classList.remove('hidden');
 
-                const title = document.createElement('div');
-                title.textContent = 'Предполагаемые кабели (участок)';
-                title.style.fontWeight = '800';
-                title.style.marginBottom = '6px';
-                box.appendChild(title);
+                host.innerHTML = `
+                    <div class="asp-header">
+                        <div class="asp-title">Предполагаемые кабели (участок)</div>
+                        <button type="button" class="asp-close" id="btn-asp-close" title="Закрыть">✕</button>
+                    </div>
+                    <div class="asp-body">
+                        ${items.map((r) => {
+                            const rid = parseInt(r?.route_id || 0, 10);
+                            if (!rid) return '';
+                            const owner = (r.owner_name || '').toString().trim() || 'Не определён';
+                            const text = `${r._index}. ${owner} — ${fmt(r.length_m)} м`;
+                            return `<button type="button" class="btn btn-sm btn-secondary asp-item" data-route-id="${rid}">${esc(text)}</button>`;
+                        }).join('') || '<span style="color:var(--text-secondary);">Нет данных</span>'}
+                    </div>
+                `;
 
-                items.forEach((r) => {
-                    const rid = parseInt(r?.route_id || 0, 10);
-                    if (!rid) return;
-                    const owner = (r.owner_name || '').toString().trim() || 'Не определён';
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'btn btn-sm btn-secondary';
-                    btn.style.display = 'block';
-                    btn.style.width = '100%';
-                    btn.style.textAlign = 'left';
-                    btn.style.marginBottom = '6px';
-                    btn.textContent = `${r._index}. ${owner} — ${fmt(r.length_m)} м`;
-                    btn.addEventListener('click', () => {
-                        try { this.highlightAssumedRoute?.(rid); } catch (_) {}
-                        try { this.setAssumedCablesPanelSelectedRoute?.(rid); } catch (_) {}
+                try {
+                    host.querySelector('#btn-asp-close')?.addEventListener('click', () => {
+                        try { host.classList.add('hidden'); } catch (_) {}
                     });
-                    box.appendChild(btn);
-                });
+                } catch (_) {}
 
-                if (!this._assumedRoutesPickPopup) {
-                    this._assumedRoutesPickPopup = L.popup({ maxWidth: 460, closeButton: true, autoClose: true, closeOnClick: true });
-                }
-                this._assumedRoutesPickPopup
-                    .setLatLng(latlng)
-                    .setContent(box);
-                this._assumedRoutesPickPopup.openOn(this.map);
+                try {
+                    host.querySelectorAll('button[data-route-id]').forEach((btn) => {
+                        btn.addEventListener('click', () => {
+                            const rid = parseInt(btn.getAttribute('data-route-id') || '0', 10);
+                            if (!rid) return;
+                            try { this.highlightAssumedRoute?.(rid); } catch (_) {}
+                            try { this.setAssumedCablesPanelSelectedRoute?.(rid); } catch (_) {}
+                        });
+                    });
+                } catch (_) {}
             };
 
             L.geoJSON({ type: 'FeatureCollection', features }, {
@@ -2203,8 +2220,21 @@ const MapManager = {
             const el = this.assumedCablesPanelEl;
             if (!el) return;
             el.classList.toggle('hidden', !visible);
+            try {
+                document.body?.classList?.toggle?.('assumed-cables-panel-open', !!visible);
+                if (visible) {
+                    const w = Math.round(el.getBoundingClientRect?.().width || 520);
+                    document.body?.style?.setProperty?.('--assumed-cables-panel-w', `${Math.max(280, w)}px`);
+                } else {
+                    document.body?.style?.removeProperty?.('--assumed-cables-panel-w');
+                }
+            } catch (_) {}
             if (!visible) {
                 this._assumedCablesPanelSelectedKey = null;
+                try {
+                    const sp = this.assumedSegmentPickerEl;
+                    if (sp) sp.classList.add('hidden');
+                } catch (_) {}
             }
         } catch (_) {}
     },
