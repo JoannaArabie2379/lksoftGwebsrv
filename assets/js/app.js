@@ -441,6 +441,15 @@ const App = {
             }
         });
 
+        // Линейка (измерение расстояний)
+        document.getElementById('btn-ruler')?.addEventListener('click', (e) => {
+            try { e.preventDefault(); } catch (_) {}
+            try {
+                MapManager.toggleRulerMode?.();
+                e.currentTarget?.classList?.toggle('active', !!MapManager.rulerMode);
+            } catch (_) {}
+        });
+
         // Слои карты
         document.querySelectorAll('.layer-item input').forEach(input => {
             input.addEventListener('change', () => this.handleLayerToggle(input));
@@ -749,6 +758,10 @@ const App = {
                         mm.toggleStuffWellMode?.();
                         document.getElementById('btn-stuff-well-map')?.classList?.toggle('active', false);
                     }
+                    if (mm.rulerMode) {
+                        mm.cancelRulerMode?.({ notify: true });
+                        document.getElementById('btn-ruler')?.classList?.toggle('active', false);
+                    }
 
                     // 3) Снять выделение на карте (одиночное/множественное)
                     try {
@@ -961,6 +974,8 @@ const App = {
             MapManager.cancelAddCableMode();
             MapManager.cancelAddDuctCableMode();
             MapManager.cancelInventoryMode?.();
+            MapManager.cancelRulerMode?.({ notify: true });
+            try { document.getElementById('btn-ruler')?.classList?.toggle('active', false); } catch (_) {}
         });
         document.getElementById('btn-finish-add-mode')?.addEventListener('click', () => MapManager.finishAddCableMode());
     },

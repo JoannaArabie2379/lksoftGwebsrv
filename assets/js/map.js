@@ -107,6 +107,16 @@ const MapManager = {
     _assumedCablesPanelSelectedKey: null,
     _assumedDirLayerById: new Map(),
 
+    // Линейка (измерение расстояний)
+    rulerMode: false,
+    rulerLayer: null,
+    rulerPoints: [], // [{ latlng, point, label }]
+    rulerFixedSegments: [], // [{ line, label, meters }]
+    rulerTempLine: null, // линия от последней точки до курсора
+    rulerCursorLabel: null, // подпись над курсором
+    rulerLastCursorLatLng: null,
+    rulerSumMeters: 0,
+
     // Цвета для слоёв
     colors: {
         wells: '#fa00fa',
@@ -464,6 +474,12 @@ const MapManager = {
                 // не должен перехватывать клики по направлениям/кабелям
                 this.map.getPane('assumedCablesPane').style.pointerEvents = 'none';
             }
+            if (!this.map.getPane('rulerPane')) {
+                this.map.createPane('rulerPane');
+                this.map.getPane('rulerPane').style.zIndex = '920';
+                // элементы линейки не должны мешать кликам/перетаскиванию карты
+                this.map.getPane('rulerPane').style.pointerEvents = 'none';
+            }
         } catch (_) {}
 
         // Отдельный слой подписей колодцев (вкл/выкл через панель инструментов)
@@ -536,6 +552,9 @@ const MapManager = {
         // Отслеживание координат курсора
         this.map.on('mousemove', (e) => {
             this.updateCursorCoordinates(e);
+            try {
+                if (this.rulerMode) this.updateRulerMouseMove(e.latlng);
+            } catch (_) {}
             this.updateHoverSnap(e.latlng);
         });
 
@@ -1576,6 +1595,261 @@ const MapManager = {
         this.setOwnersLegendEnabled(!this.ownersLegendEnabled);
     },
 
+    // ========================
+    // Линейка (измерение)
+    // ========================
+
+    toggleRulerMode() {
+        if (this.rulerMode) this.cancelRulerMode();
+        else this.startRulerMode();
+    },
+
+    startRulerMode() {
+        if (!this.map) return;
+        this.rulerMode = true;
+        this.rulerSumMeters = 0;
+        this.rulerPoints = [];
+        this.rulerFixedSegments = [];
+        this.rulerLastCursorLatLng = null;
+
+        // выключаем конфликтующие режимы (best-effort)
+        try {
+            this.cancelAddDirectionMode?.();
+            this.cancelAddingObject?.();
+            this.cancelAddCableMode?.({ notify: false });
+            this.cancelAddDuctCableMode?.({ notify: false });
+            if (this.movePointMode) this.cancelMovePointMode?.();
+            if (this.relocateDuctCableMode) this.toggleRelocateDuctCableMode?.();
+            if (this.shortestDuctCableMode) this.toggleShortestDuctCableMode?.();
+            if (this.inventoryMode) this.cancelInventoryMode?.();
+            if (this.stuffWellMode) this.toggleStuffWellMode?.();
+        } catch (_) {}
+
+        this.map.getContainer().style.cursor = 'crosshair';
+
+        // слой линейки
+        try {
+            if (this.rulerLayer) {
+                this.rulerLayer.clearLayers();
+                this.map.removeLayer(this.rulerLayer);
+            }
+        } catch (_) {}
+        this.rulerLayer = L.featureGroup([], { pane: 'rulerPane' }).addTo(this.map);
+
+        // статус + отмена (используем общий add-mode-status)
+        try {
+            const statusEl = document.getElementById('add-mode-status');
+            const textEl = document.getElementById('add-mode-text');
+            const finishBtn = document.getElementById('btn-finish-add-mode');
+            if (statusEl) statusEl.classList.remove('hidden');
+            if (finishBtn) finishBtn.classList.add('hidden');
+            if (textEl) textEl.textContent = 'Линейка: кликните точки. Esc или «Отмена» — выход.';
+        } catch (_) {}
+
+        try { App?.notify?.('Линейка включена', 'info'); } catch (_) {}
+    },
+
+    cancelRulerMode(opts = null) {
+        if (!this.rulerMode) return;
+        this.rulerMode = false;
+        this.rulerLastCursorLatLng = null;
+        this.rulerSumMeters = 0;
+        this.rulerPoints = [];
+        this.rulerFixedSegments = [];
+
+        try {
+            if (this.rulerLayer) {
+                this.rulerLayer.clearLayers();
+                this.map.removeLayer(this.rulerLayer);
+            }
+        } catch (_) {}
+        this.rulerLayer = null;
+        this.rulerTempLine = null;
+        this.rulerCursorLabel = null;
+
+        // курсор возвращаем, если не активны другие режимы
+        try {
+            const anyCrosshair = !!(this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode || this.groupPickMode || this.incidentSelectMode || this.inventoryMode || this.movePointMode);
+            if (!anyCrosshair && this.map) this.map.getContainer().style.cursor = '';
+        } catch (_) {}
+
+        // прячем статус, если не активны другие режимы добавления
+        try {
+            if (!this.addDirectionMode && !this.addingObject && !this.addCableMode && !this.addDuctCableMode) {
+                document.getElementById('add-mode-status')?.classList?.add('hidden');
+            }
+        } catch (_) {}
+
+        try {
+            const o = opts || {};
+            if (o.notify !== false) App?.notify?.('Линейка выключена', 'info');
+        } catch (_) {}
+    },
+
+    formatRulerDistance(meters) {
+        const m = Number(meters);
+        if (!Number.isFinite(m)) return '-';
+        if (m >= 1000) return `${(m / 1000).toFixed(3)} км`;
+        return `${m.toFixed(2)} м`;
+    },
+
+    formatRulerCoords(latlng) {
+        const lat = Number(latlng?.lat);
+        const lng = Number(latlng?.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return ['-', '-'];
+        return [lat.toFixed(6), lng.toFixed(6)];
+    },
+
+    rulerMidpointAndAngle(latlngA, latlngB) {
+        try {
+            const p0 = this.map.latLngToLayerPoint(latlngA);
+            const p1 = this.map.latLngToLayerPoint(latlngB);
+            const mx = (p0.x + p1.x) / 2;
+            const my = (p0.y + p1.y) / 2;
+            const dx = p1.x - p0.x;
+            const dy = p1.y - p0.y;
+            let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+            if (angle > 90 || angle < -90) angle += 180;
+            const pos = this.map.layerPointToLatLng(L.point(mx, my));
+            return { pos, angle };
+        } catch (_) {
+            return { pos: latlngA, angle: 0 };
+        }
+    },
+
+    ensureRulerCursorLabel(latlng, html) {
+        try {
+            const icon = L.divIcon({
+                className: 'ruler-cursor-label',
+                html: `<div style="transform: translate(-50%, -110%);">
+                    <div style="background: rgba(255,255,255,0.9); color:#111; padding:2px 6px; border-radius:6px; border:1px solid rgba(0,0,0,0.2); font-size:12px; font-weight:700; white-space:nowrap; text-align:center;">
+                        ${html}
+                    </div>
+                </div>`,
+                iconAnchor: [0, 0],
+            });
+            if (!this.rulerCursorLabel) {
+                this.rulerCursorLabel = L.marker(latlng, { icon, interactive: false, keyboard: false, pane: 'rulerPane' });
+                this.rulerCursorLabel.addTo(this.rulerLayer);
+            } else {
+                this.rulerCursorLabel.setLatLng(latlng);
+                this.rulerCursorLabel.setIcon(icon);
+            }
+        } catch (_) {}
+    },
+
+    updateRulerMouseMove(latlng) {
+        if (!this.rulerMode || !this.map || !this.rulerLayer) return;
+        this.rulerLastCursorLatLng = latlng;
+        const pts = this.rulerPoints || [];
+        if (!pts.length) {
+            // нет точек — не показываем ничего
+            try {
+                if (this.rulerTempLine) this.rulerLayer.removeLayer(this.rulerTempLine);
+                this.rulerTempLine = null;
+                if (this.rulerCursorLabel) this.rulerLayer.removeLayer(this.rulerCursorLabel);
+                this.rulerCursorLabel = null;
+            } catch (_) {}
+            return;
+        }
+
+        const last = pts[pts.length - 1]?.latlng;
+        if (last) {
+            // временная линия до курсора
+            if (!this.rulerTempLine) {
+                this.rulerTempLine = L.polyline([last, latlng], {
+                    color: '#555555',
+                    weight: 2,
+                    opacity: 0.9,
+                    dashArray: '6, 6',
+                    pane: 'rulerPane',
+                    interactive: false,
+                }).addTo(this.rulerLayer);
+            } else {
+                this.rulerTempLine.setLatLngs([last, latlng]);
+            }
+        }
+
+        const tailMeters = last ? this.map.distance(last, latlng) : 0;
+        const sumBuilt = Number(this.rulerSumMeters || 0) || 0;
+        if (pts.length === 1) {
+            this.ensureRulerCursorLabel(latlng, this.formatRulerDistance(tailMeters));
+        } else {
+            const total = sumBuilt + tailMeters;
+            this.ensureRulerCursorLabel(latlng, `${this.formatRulerDistance(total)}<br><span style="font-weight:600; color:#444;">${this.formatRulerDistance(sumBuilt)}</span>`);
+        }
+    },
+
+    addRulerPoint(latlng) {
+        if (!this.rulerMode || !this.map) return;
+        if (!latlng) return;
+        if (!this.rulerLayer) {
+            this.rulerLayer = L.featureGroup([], { pane: 'rulerPane' }).addTo(this.map);
+        }
+
+        const size = this.getWellMarkerSizePx(); // диаметр, px
+        const radius = Math.max(2, Math.round(size / 4)); // в 2 раза меньше маркера
+
+        const point = L.circleMarker(latlng, {
+            radius,
+            color: '#444444',
+            weight: 1,
+            opacity: 1,
+            fillColor: '#555555',
+            fillOpacity: 0.95,
+            pane: 'rulerPane',
+            interactive: false,
+        }).addTo(this.rulerLayer);
+
+        const [lat, lng] = this.formatRulerCoords(latlng);
+        const coordIcon = L.divIcon({
+            className: 'ruler-point-coords',
+            html: `<div style="transform: translate(8px, -8px);">
+                <div style="background: rgba(255,255,255,0.85); color:#111; padding:2px 6px; border-radius:6px; border:1px solid rgba(0,0,0,0.15); font-size:11px; font-weight:700; white-space:nowrap;">
+                    ${lat}<br>${lng}
+                </div>
+            </div>`,
+            iconAnchor: [0, 0],
+        });
+        const label = L.marker(latlng, { icon: coordIcon, interactive: false, keyboard: false, pane: 'rulerPane' }).addTo(this.rulerLayer);
+
+        const prev = (this.rulerPoints || []).length ? this.rulerPoints[this.rulerPoints.length - 1].latlng : null;
+        this.rulerPoints.push({ latlng, point, label });
+
+        if (prev) {
+            const meters = this.map.distance(prev, latlng);
+            this.rulerSumMeters = (Number(this.rulerSumMeters || 0) || 0) + meters;
+
+            const line = L.polyline([prev, latlng], {
+                color: '#555555',
+                weight: 2,
+                opacity: 0.9,
+                dashArray: '6, 6',
+                pane: 'rulerPane',
+                interactive: false,
+            }).addTo(this.rulerLayer);
+
+            const { pos, angle } = this.rulerMidpointAndAngle(prev, latlng);
+            const distText = this.formatRulerDistance(meters);
+            const segIcon = L.divIcon({
+                className: 'ruler-seg-label',
+                html: `<div style="transform: translate(-50%, -50%) rotate(${angle}deg); transform-origin:center;">
+                    <div style="background: rgba(255,255,255,0.85); color:#111; padding:2px 6px; border-radius:6px; border:1px solid rgba(0,0,0,0.15); font-size:12px; font-weight:800; white-space:nowrap;">
+                        ${distText}
+                    </div>
+                </div>`,
+                iconAnchor: [0, 0],
+            });
+            const segLabel = L.marker(pos, { icon: segIcon, interactive: false, keyboard: false, pane: 'rulerPane' }).addTo(this.rulerLayer);
+            this.rulerFixedSegments.push({ line, label: segLabel, meters });
+        }
+
+        // обновим динамику на курсоре (если курсор уже известен)
+        try {
+            if (this.rulerLastCursorLatLng) this.updateRulerMouseMove(this.rulerLastCursorLatLng);
+        } catch (_) {}
+    },
+
     async loadAssumedCablesLayer(variantNo = null) {
         try {
             const v0 = (variantNo === null || variantNo === undefined)
@@ -1985,6 +2259,10 @@ const MapManager = {
             return;
         }
         const latlng = e?.latlng || e;
+        if (this.rulerMode) {
+            try { this.addRulerPoint(latlng); } catch (_) {}
+            return;
+        }
         const hits = this.getObjectsAtLatLng(latlng);
         this.lastClickHits = hits;
 
@@ -2921,7 +3199,7 @@ const MapManager = {
     updateHoverSnap(latlng) {
         if (!this.map) return;
         // Не мешаем режимам добавления
-        if (this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode) return;
+        if (this.rulerMode || this.addDirectionMode || this.addingObject || this.addCableMode || this.addDuctCableMode) return;
 
         const hits = this.getObjectsAtLatLng(latlng);
         const container = this.map.getContainer();
@@ -3435,6 +3713,10 @@ const MapManager = {
     onMapClick(e) {
         if (this._suppressClickOnce) {
             this._suppressClickOnce = false;
+            return;
+        }
+        if (this.rulerMode) {
+            try { this.addRulerPoint(e.latlng); } catch (_) {}
             return;
         }
         // Если включён режим добавления кабеля (ломаная линия)
