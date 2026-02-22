@@ -491,6 +491,12 @@ const MapManager = {
                 this.map.getPane('rulerLabelPane').style.zIndex = '930';
                 this.map.getPane('rulerLabelPane').style.pointerEvents = 'none';
             }
+            if (!this.map.getPane('highlightPane')) {
+                this.map.createPane('highlightPane');
+                // Подсветка выбранных объектов (красная) должна быть поверх всех линий
+                this.map.getPane('highlightPane').style.zIndex = '980';
+                this.map.getPane('highlightPane').style.pointerEvents = 'none';
+            }
         } catch (_) {}
 
         // Отдельный слой подписей колодцев (вкл/выкл через панель инструментов)
@@ -3706,6 +3712,7 @@ const MapManager = {
             if (!fc || fc.type !== 'FeatureCollection') return;
             this.highlightLayer = L.geoJSON(fc, {
                 interactive: false,
+                pane: 'highlightPane',
                 style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' })
             }).addTo(this.map);
             this.setHighlightBarVisible(true);
@@ -3720,7 +3727,7 @@ const MapManager = {
             const layer = this.findLayerByMeta('unified_cable', cableId);
             const latlngs = layer?.getLatLngs?.();
             if (!latlngs) return;
-            this.highlightLayer = L.polyline(latlngs, { interactive: false, color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }).addTo(this.map);
+            this.highlightLayer = L.polyline(latlngs, { interactive: false, pane: 'highlightPane', color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }).addTo(this.map);
             this.setHighlightBarVisible(true);
             const bounds = this.highlightLayer.getBounds();
             if (bounds && bounds.isValid()) {
@@ -3737,7 +3744,7 @@ const MapManager = {
             if (!geometry) return;
             this.highlightLayer = L.geoJSON(
                 { type: 'FeatureCollection', features: [{ type: 'Feature', geometry, properties: {} }] },
-                { interactive: false, style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }) }
+                { interactive: false, pane: 'highlightPane', style: () => ({ color: '#ff0000', weight: 5, opacity: 0.95, className: 'cable-highlight-path' }) }
             ).addTo(this.map);
             this.setHighlightBarVisible(true);
             const bounds = this.highlightLayer.getBounds();
