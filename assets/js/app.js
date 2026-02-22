@@ -1056,9 +1056,19 @@ const App = {
             const input = document.getElementById(checkboxId);
             const label = input?.closest('label');
             if (!label || !name) return;
-            const spans = label.querySelectorAll('span');
-            const textSpan = spans?.[spans.length - 1];
-            if (textSpan) textSpan.textContent = name;
+            const titleSpan = label.querySelector('span.layer-title');
+            if (titleSpan) {
+                titleSpan.textContent = name;
+                return;
+            }
+            // fallback: first span that is not icon/controls
+            const spans = Array.from(label.querySelectorAll('span') || []);
+            const s = spans.find(x =>
+                !x.classList.contains('layer-icon') &&
+                !x.classList.contains('layer-inline-controls') &&
+                !x.classList.contains('layer-title')
+            );
+            if (s) s.textContent = name;
         };
         setLayerIcon('layer-wells', codeToColor.well);
         setLayerIcon('layer-channels', codeToColor.channel);
@@ -1068,8 +1078,7 @@ const App = {
         setLayerIcon('layer-duct-cables', codeToColor.cable_duct);
 
         // Обновляем названия слоёв из справочника "Виды объектов"
-        setLayerName('layer-wells', byCode.well?.name);
-        setLayerName('layer-channels', byCode.channel?.name);
+        // Для "Колодцы"/"Направления каналов" оставляем фиксированные подписи UI (чтобы не ломать UX).
         setLayerName('layer-markers', byCode.marker?.name);
         setLayerName('layer-ground-cables', byCode.cable_ground?.name);
         setLayerName('layer-aerial-cables', byCode.cable_aerial?.name);

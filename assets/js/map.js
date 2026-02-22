@@ -474,11 +474,15 @@ const MapManager = {
                 // не должен перехватывать клики по направлениям/кабелям
                 this.map.getPane('assumedCablesPane').style.pointerEvents = 'none';
             }
-            if (!this.map.getPane('rulerPane')) {
-                this.map.createPane('rulerPane');
-                this.map.getPane('rulerPane').style.zIndex = '920';
-                // элементы линейки не должны мешать кликам/перетаскиванию карты
-                this.map.getPane('rulerPane').style.pointerEvents = 'none';
+            if (!this.map.getPane('rulerLinePane')) {
+                this.map.createPane('rulerLinePane');
+                this.map.getPane('rulerLinePane').style.zIndex = '920';
+                this.map.getPane('rulerLinePane').style.pointerEvents = 'none';
+            }
+            if (!this.map.getPane('rulerLabelPane')) {
+                this.map.createPane('rulerLabelPane');
+                this.map.getPane('rulerLabelPane').style.zIndex = '930';
+                this.map.getPane('rulerLabelPane').style.pointerEvents = 'none';
             }
         } catch (_) {}
 
@@ -1634,7 +1638,7 @@ const MapManager = {
                 this.map.removeLayer(this.rulerLayer);
             }
         } catch (_) {}
-        this.rulerLayer = L.featureGroup([], { pane: 'rulerPane' }).addTo(this.map);
+        this.rulerLayer = L.featureGroup().addTo(this.map);
 
         // статус + отмена (используем общий add-mode-status)
         try {
@@ -1730,7 +1734,7 @@ const MapManager = {
                 iconSize: null,
             });
             if (!this.rulerCursorLabel) {
-                this.rulerCursorLabel = L.marker(latlng, { icon, interactive: false, keyboard: false, pane: 'rulerPane' });
+                this.rulerCursorLabel = L.marker(latlng, { icon, interactive: false, keyboard: false, pane: 'rulerLabelPane' });
                 this.rulerCursorLabel.addTo(this.rulerLayer);
             } else {
                 this.rulerCursorLabel.setLatLng(latlng);
@@ -1763,7 +1767,7 @@ const MapManager = {
                     weight: 2,
                     opacity: 0.9,
                     dashArray: '6, 6',
-                    pane: 'rulerPane',
+                    pane: 'rulerLinePane',
                     interactive: false,
                 }).addTo(this.rulerLayer);
             } else {
@@ -1788,7 +1792,7 @@ const MapManager = {
         if (!this.rulerMode || !this.map) return;
         if (!latlng) return;
         if (!this.rulerLayer) {
-            this.rulerLayer = L.featureGroup([], { pane: 'rulerPane' }).addTo(this.map);
+            this.rulerLayer = L.featureGroup().addTo(this.map);
         }
 
         const size = this.getWellMarkerSizePx(); // диаметр, px
@@ -1801,7 +1805,7 @@ const MapManager = {
             opacity: 1,
             fillColor: '#555555',
             fillOpacity: 0.95,
-            pane: 'rulerPane',
+            pane: 'rulerLinePane',
             interactive: false,
         }).addTo(this.rulerLayer);
 
@@ -1816,7 +1820,7 @@ const MapManager = {
             iconAnchor: [0, 0],
             iconSize: null,
         });
-        const label = L.marker(latlng, { icon: coordIcon, interactive: false, keyboard: false, pane: 'rulerPane' }).addTo(this.rulerLayer);
+        const label = L.marker(latlng, { icon: coordIcon, interactive: false, keyboard: false, pane: 'rulerLabelPane' }).addTo(this.rulerLayer);
 
         const prev = (this.rulerPoints || []).length ? this.rulerPoints[this.rulerPoints.length - 1].latlng : null;
         this.rulerPoints.push({ latlng, point, label });
@@ -1830,7 +1834,7 @@ const MapManager = {
                 weight: 2,
                 opacity: 0.9,
                 dashArray: '6, 6',
-                pane: 'rulerPane',
+                pane: 'rulerLinePane',
                 interactive: false,
             }).addTo(this.rulerLayer);
 
@@ -1846,7 +1850,7 @@ const MapManager = {
                 iconAnchor: [0, 0],
                 iconSize: null,
             });
-            const segLabel = L.marker(pos, { icon: segIcon, interactive: false, keyboard: false, pane: 'rulerPane' }).addTo(this.rulerLayer);
+            const segLabel = L.marker(pos, { icon: segIcon, interactive: false, keyboard: false, pane: 'rulerLabelPane' }).addTo(this.rulerLayer);
             this.rulerFixedSegments.push({ line, label: segLabel, meters });
         }
 
