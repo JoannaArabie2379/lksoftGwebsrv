@@ -737,6 +737,7 @@ class AssumedCableController extends BaseController
                 COALESCE(o.name, '') AS owner_name,
                 r.confidence,
                 r.length_m,
+                COALESCE(r.evidence_json->'direction_ids', '[]'::jsonb) AS direction_ids,
                 sw.number AS start_well_number,
                 ew.number AS end_well_number
              FROM assumed_cable_routes r

@@ -106,7 +106,10 @@ const MapManager = {
     assumedCablesPanelEl: null,
     _assumedCablesPanelSelectedKey: null,
     _assumedRouteLayerById: new Map(),
-    _assumedRoutesPopupHtml: null,
+    _assumedRoutesById: new Map(), // route_id -> { ...row, _index, _direction_ids[] }
+    _assumedRouteIdsByDirectionId: new Map(), // direction_id -> [route_id...]
+    _assumedBaseDirLatLngsById: new Map(), // direction_id -> LatLng[]
+    _assumedRoutesPopupHtml: null, // legacy fallback
     _assumedRoutesPopup: null,
 
     // Линейка (измерение расстояний)
@@ -1887,40 +1890,141 @@ const MapManager = {
 
             this.layers.assumedCables?.clearLayers?.();
             try { this._assumedRouteLayerById = new Map(); } catch (_) {}
+            try { this._assumedRoutesById = new Map(); } catch (_) {}
+            try { this._assumedRouteIdsByDirectionId = new Map(); } catch (_) {}
+            try { this._assumedBaseDirLatLngsById = new Map(); } catch (_) {}
+            this._assumedRoutesPopupHtml = null;
             const features = resp.features.filter(f => f && f.geometry && f.geometry.type);
             // базовая сетка направлений (всегда серым, тоньше)
             try {
-                const f = { ...(this.filters || {}) };
-                const cd = await API.channelDirections.geojson(f);
+                // для hover-логики нужна полная геометрия направлений (без фильтров)
+                const cd = await API.channelDirections.geojson({});
                 if (cd && cd.type === 'FeatureCollection' && Array.isArray(cd.features)) {
                     const weight = Math.max(0.5, this.getDirectionLineWeight() / 2);
                     L.geoJSON(cd, {
                         pane: 'assumedCablesBasePane',
                         interactive: false,
                         style: () => ({ color: '#777777', weight, opacity: 0.75 }),
+                        onEachFeature: (feature, layer) => {
+                            try {
+                                const p = feature?.properties || {};
+                                const id = parseInt(p.id || p.direction_id || p.object_id || 0, 10);
+                                if (!id) return;
+                                const raw = layer.getLatLngs?.();
+                                if (!raw) return;
+                                const latlngs = Array.isArray(raw?.[0]) ? raw.flat(2) : raw;
+                                if (Array.isArray(latlngs) && latlngs.length >= 2) {
+                                    this._assumedBaseDirLatLngsById.set(id, latlngs);
+                                }
+                            } catch (_) {}
+                        },
                     }).addTo(this.layers.assumedCables);
                 }
             } catch (_) {}
 
             if (!features.length) return;
 
+            const routeColor = '#8300ff';
+            const routeOpacity = 87 / 255; // #8300ff57
             const baseWeight = Math.max(1, this.getDirectionLineWeight());
-            const pickColor = (props) => {
-                const c = (props?.owner_color || '').toString().trim();
-                if (c) return c;
-                return this.colors.assumedCables || '#a855f7';
+            const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const fmt = (n) => {
+                const x = Number(n);
+                if (!Number.isFinite(x)) return '-';
+                return (Math.round(x * 100) / 100).toFixed(2);
+            };
+            const normDirectionIds = (raw) => {
+                try {
+                    if (Array.isArray(raw)) return raw.map(x => parseInt(x, 10)).filter(x => Number.isFinite(x) && x > 0);
+                    if (raw === null || raw === undefined) return [];
+                    if (typeof raw === 'string') {
+                        const s = raw.trim();
+                        if (!s) return [];
+                        const parsed = JSON.parse(s);
+                        if (Array.isArray(parsed)) return parsed.map(x => parseInt(x, 10)).filter(x => Number.isFinite(x) && x > 0);
+                    }
+                } catch (_) {}
+                return [];
+            };
+            const distSqPointToSegment = (p, a, b) => {
+                const abx = b.x - a.x;
+                const aby = b.y - a.y;
+                const apx = p.x - a.x;
+                const apy = p.y - a.y;
+                const abLenSq = (abx * abx) + (aby * aby);
+                if (abLenSq <= 0) return (apx * apx) + (apy * apy);
+                let t = ((apx * abx) + (apy * aby)) / abLenSq;
+                if (t < 0) t = 0;
+                if (t > 1) t = 1;
+                const cx = a.x + t * abx;
+                const cy = a.y + t * aby;
+                const dx = p.x - cx;
+                const dy = p.y - cy;
+                return (dx * dx) + (dy * dy);
+            };
+            const distSqToPolylinePx = (latlng, latlngs) => {
+                try {
+                    if (!this.map || !Array.isArray(latlngs) || latlngs.length < 2) return Number.POSITIVE_INFINITY;
+                    const p = this.map.latLngToLayerPoint(latlng);
+                    const pts = latlngs.map(ll => this.map.latLngToLayerPoint(ll));
+                    let best = Number.POSITIVE_INFINITY;
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        const d = distSqPointToSegment(p, pts[i], pts[i + 1]);
+                        if (d < best) best = d;
+                    }
+                    return best;
+                } catch (_) {
+                    return Number.POSITIVE_INFINITY;
+                }
+            };
+            const pickHoveredDirectionId = (routeId, latlng) => {
+                const rid = parseInt(routeId || 0, 10);
+                if (!rid) return null;
+                const r = this._assumedRoutesById?.get?.(rid) || null;
+                const dirIds = r?._direction_ids || [];
+                if (!Array.isArray(dirIds) || !dirIds.length) return null;
+                let bestId = null;
+                let bestD = Number.POSITIVE_INFINITY;
+                for (const did of dirIds) {
+                    const ll = this._assumedBaseDirLatLngsById?.get?.(did) || null;
+                    if (!ll) continue;
+                    const d = distSqToPolylinePx(latlng, ll);
+                    if (d < bestD) {
+                        bestD = d;
+                        bestId = did;
+                    }
+                }
+                return bestId;
+            };
+            const popupHtmlForRoutes = (routeIds, title) => {
+                const ids = Array.isArray(routeIds) ? routeIds : [];
+                const items = ids
+                    .map(x => parseInt(x, 10))
+                    .filter(x => Number.isFinite(x) && x > 0)
+                    .map(id => this._assumedRoutesById?.get?.(id))
+                    .filter(Boolean)
+                    .sort((a, b) => (a._index || 0) - (b._index || 0));
+                const lines = items.map((r) => {
+                    const owner = (r.owner_name || '').toString().trim() || 'Не определён';
+                    return `${r._index}. ${esc(owner)} — ${esc(fmt(r.length_m))} м`;
+                }).join('<br>');
+                return `<div style="max-height:260px; overflow:auto; font-size:12px; line-height:1.4;">
+                    <div style="font-weight:800; margin-bottom:6px;">${esc(title || 'Предполагаемые кабели')}</div>
+                    ${lines || '<span style="color:var(--text-secondary);">Нет данных</span>'}
+                </div>`;
             };
 
             L.geoJSON({ type: 'FeatureCollection', features }, {
                 pane: 'assumedCablesPane',
                 interactive: true,
                 style: (feature) => {
-                    const p = feature?.properties || {};
                     return {
-                        color: pickColor(p),
                         weight: baseWeight + 2,
-                        opacity: 0.85,
-                        dashArray: '6, 6',
+                        color: routeColor,
+                        opacity: routeOpacity,
+                        lineCap: 'round',
+                        lineJoin: 'round',
+                        bubblingMouseEvents: false,
                     };
                 },
                 onEachFeature: (feature, layer) => {
@@ -1936,13 +2040,23 @@ const MapManager = {
                         // hover: показать список предполагаемых кабелей
                         layer.on('mouseover', (e) => {
                             try {
-                                if (!this._assumedRoutesPopupHtml) return;
+                                if (!this._assumedRoutesById || this._assumedRoutesById.size <= 0) return;
                                 if (!this._assumedRoutesPopup) {
                                     this._assumedRoutesPopup = L.popup({ maxWidth: 420, closeButton: false, autoClose: true, closeOnClick: false });
                                 }
+                                const rid = parseInt(routeId || 0, 10);
+                                const did = pickHoveredDirectionId(rid, e.latlng);
+                                let html = null;
+                                if (did) {
+                                    const routeIds = this._assumedRouteIdsByDirectionId?.get?.(did) || [];
+                                    html = popupHtmlForRoutes(routeIds, 'Предполагаемые кабели (участок)');
+                                } else if (rid) {
+                                    html = popupHtmlForRoutes([rid], 'Предполагаемый кабель');
+                                }
+                                if (!html) return;
                                 this._assumedRoutesPopup
                                     .setLatLng(e.latlng)
-                                    .setContent(this._assumedRoutesPopupHtml);
+                                    .setContent(html);
                                 this._assumedRoutesPopup.openOn(this.map);
                             } catch (_) {}
                         });
@@ -1960,22 +2074,24 @@ const MapManager = {
                 const list = await API.assumedCables.list(v);
                 if (list?.success === false) throw new Error(list?.message || 'Ошибка');
                 const rows = Array.isArray(list?.data?.rows) ? list.data.rows : (Array.isArray(list?.rows) ? list.rows : []);
-                const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-                const fmt = (n) => {
-                    const x = Number(n);
-                    if (!Number.isFinite(x)) return '-';
-                    return (Math.round(x * 100) / 100).toFixed(2);
-                };
-                const lines = rows.map((r, idx) => {
-                    const owner = (r.owner_name || '').toString().trim() || 'Не определён';
-                    return `${idx + 1}. ${esc(owner)} — ${esc(fmt(r.length_m))} м`;
-                }).join('<br>');
-                this._assumedRoutesPopupHtml = `<div style="max-height:260px; overflow:auto; font-size:12px; line-height:1.4;">
-                    <div style="font-weight:800; margin-bottom:6px;">Предполагаемые кабели</div>
-                    ${lines || '<span style="color:var(--text-secondary);">Нет данных</span>'}
-                </div>`;
+                try { this._assumedRoutesById = new Map(); } catch (_) {}
+                try { this._assumedRouteIdsByDirectionId = new Map(); } catch (_) {}
+                rows.forEach((r, idx) => {
+                    const rid = parseInt(r?.route_id || 0, 10);
+                    if (!rid) return;
+                    const dirIds = normDirectionIds(r?.direction_ids);
+                    const rr = { ...(r || {}), _index: idx + 1, _direction_ids: dirIds };
+                    this._assumedRoutesById.set(rid, rr);
+                    for (const did of dirIds) {
+                        if (!did) continue;
+                        const arr = this._assumedRouteIdsByDirectionId.get(did) || [];
+                        arr.push(rid);
+                        this._assumedRouteIdsByDirectionId.set(did, arr);
+                    }
+                });
             } catch (_) {
-                this._assumedRoutesPopupHtml = null;
+                try { this._assumedRoutesById = new Map(); } catch (_) {}
+                try { this._assumedRouteIdsByDirectionId = new Map(); } catch (_) {}
             }
         } catch (e) {
             console.error('Ошибка загрузки предполагаемых кабелей:', e);
