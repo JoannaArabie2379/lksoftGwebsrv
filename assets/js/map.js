@@ -106,6 +106,8 @@ const MapManager = {
     assumedCablesPanelEl: null,
     _assumedCablesPanelSelectedKey: null,
     _assumedRouteLayerById: new Map(),
+    _assumedRoutesPopupHtml: null,
+    _assumedRoutesPopup: null,
 
     // Линейка (измерение расстояний)
     rulerMode: false,
@@ -471,8 +473,13 @@ const MapManager = {
             if (!this.map.getPane('assumedCablesPane')) {
                 this.map.createPane('assumedCablesPane');
                 this.map.getPane('assumedCablesPane').style.zIndex = '410';
-                // не должен перехватывать клики по направлениям/кабелям
-                this.map.getPane('assumedCablesPane').style.pointerEvents = 'none';
+                // нужен hover по предполагаемым кабелям
+                this.map.getPane('assumedCablesPane').style.pointerEvents = 'auto';
+            }
+            if (!this.map.getPane('assumedCablesBasePane')) {
+                this.map.createPane('assumedCablesBasePane');
+                this.map.getPane('assumedCablesBasePane').style.zIndex = '405';
+                this.map.getPane('assumedCablesBasePane').style.pointerEvents = 'none';
             }
             if (!this.map.getPane('rulerLinePane')) {
                 this.map.createPane('rulerLinePane');
@@ -1875,6 +1882,20 @@ const MapManager = {
             this.layers.assumedCables?.clearLayers?.();
             try { this._assumedRouteLayerById = new Map(); } catch (_) {}
             const features = resp.features.filter(f => f && f.geometry && f.geometry.type);
+            // базовая сетка направлений (всегда серым, тоньше)
+            try {
+                const f = { ...(this.filters || {}) };
+                const cd = await API.channelDirections.geojson(f);
+                if (cd && cd.type === 'FeatureCollection' && Array.isArray(cd.features)) {
+                    const weight = Math.max(0.5, this.getDirectionLineWeight() / 2);
+                    L.geoJSON(cd, {
+                        pane: 'assumedCablesBasePane',
+                        interactive: false,
+                        style: () => ({ color: '#777777', weight, opacity: 0.75 }),
+                    }).addTo(this.layers.assumedCables);
+                }
+            } catch (_) {}
+
             if (!features.length) return;
 
             const baseWeight = Math.max(1, this.getDirectionLineWeight());
@@ -1886,7 +1907,7 @@ const MapManager = {
 
             L.geoJSON({ type: 'FeatureCollection', features }, {
                 pane: 'assumedCablesPane',
-                interactive: false,
+                interactive: true,
                 style: (feature) => {
                     const p = feature?.properties || {};
                     return {
@@ -1902,9 +1923,54 @@ const MapManager = {
                         const routeId = parseInt(p.route_id || p.id || 0, 10);
                         layer._igsMeta = { objectType: 'assumed_cable_route', properties: { id: routeId, ...p } };
                         if (routeId) this._assumedRouteLayerById.set(routeId, layer);
+                        // не даём клику "провалиться" в выбор объектов
+                        layer.on('click', (e) => {
+                            try { L.DomEvent.stopPropagation(e); } catch (_) {}
+                        });
+                        // hover: показать список предполагаемых кабелей
+                        layer.on('mouseover', (e) => {
+                            try {
+                                if (!this._assumedRoutesPopupHtml) return;
+                                if (!this._assumedRoutesPopup) {
+                                    this._assumedRoutesPopup = L.popup({ maxWidth: 420, closeButton: false, autoClose: true, closeOnClick: false });
+                                }
+                                this._assumedRoutesPopup
+                                    .setLatLng(e.latlng)
+                                    .setContent(this._assumedRoutesPopupHtml);
+                                this._assumedRoutesPopup.openOn(this.map);
+                            } catch (_) {}
+                        });
+                        layer.on('mouseout', () => {
+                            try {
+                                if (this._assumedRoutesPopup) this.map.closePopup(this._assumedRoutesPopup);
+                            } catch (_) {}
+                        });
                     } catch (_) {}
                 },
             }).addTo(this.layers.assumedCables);
+
+            // кеш для hover popup: список всех маршрутов
+            try {
+                const list = await API.assumedCables.list(v);
+                if (list?.success === false) throw new Error(list?.message || 'Ошибка');
+                const rows = Array.isArray(list?.data?.rows) ? list.data.rows : (Array.isArray(list?.rows) ? list.rows : []);
+                const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                const fmt = (n) => {
+                    const x = Number(n);
+                    if (!Number.isFinite(x)) return '-';
+                    return (Math.round(x * 100) / 100).toFixed(2);
+                };
+                const lines = rows.map((r, idx) => {
+                    const owner = (r.owner_name || '').toString().trim() || 'Не определён';
+                    return `${idx + 1}. ${esc(owner)} — ${esc(fmt(r.length_m))} м`;
+                }).join('<br>');
+                this._assumedRoutesPopupHtml = `<div style="max-height:260px; overflow:auto; font-size:12px; line-height:1.4;">
+                    <div style="font-weight:800; margin-bottom:6px;">Предполагаемые кабели</div>
+                    ${lines || '<span style="color:var(--text-secondary);">Нет данных</span>'}
+                </div>`;
+            } catch (_) {
+                this._assumedRoutesPopupHtml = null;
+            }
         } catch (e) {
             console.error('Ошибка загрузки предполагаемых кабелей:', e);
         }
@@ -1914,9 +1980,14 @@ const MapManager = {
         const id = parseInt(routeId || 0, 10);
         if (!id) return;
         const layer = this._assumedRouteLayerById?.get?.(id) || null;
-        if (layer) {
-            this.setSelectedLayer(layer);
-        }
+        if (!layer) return;
+        try {
+            // красная подсветка (как кабель)
+            const feat = layer.toGeoJSON?.();
+            if (feat && feat.type === 'Feature' && feat.geometry) {
+                this.highlightFeatureCollection?.({ type: 'FeatureCollection', features: [feat] });
+            }
+        } catch (_) {}
     },
 
     assumedVariantLabel(v) {

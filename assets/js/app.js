@@ -1363,6 +1363,7 @@ const App = {
         // если выключили слой предполагаемых кабелей — сбрасываем выделение и закрываем панель
         if (input.id === 'layer-assumed-cables' && !input.checked) {
             try { MapManager.clearSelectedObject?.(); } catch (_) {}
+            try { MapManager.clearHighlight?.(); } catch (_) {}
             try { MapManager.setAssumedCablesPanelVisible?.(false); } catch (_) {}
         }
 
